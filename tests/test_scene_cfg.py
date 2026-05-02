@@ -31,11 +31,7 @@ class TestSceneCfgDefaults:
 
     def test_ccd_link_names_contains_link6(self):
         sc = SceneCfg()
-        assert "Link6" in sc.ccd_link_names
-
-    def test_ccd_link_names_contains_end_effector(self):
-        sc = SceneCfg()
-        assert "end_effector" in sc.ccd_link_names
+        assert "link6" in sc.ccd_link_names  # lowercase — matches mechArm 270-Pi URDF
 
 
 class TestSceneCfgOverrides:

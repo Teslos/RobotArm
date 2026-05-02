@@ -35,4 +35,4 @@ scene:
   busbar_prim_path: /World/busbar
   robot_position: [0.0, 0.0, 0.0]
   busbar_position: [0.2, 0.0, 0.05]
-  ccd_link_names: [Link6, end_effector]
+  ccd_link_names: [link6]

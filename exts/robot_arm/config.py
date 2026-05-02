@@ -72,7 +72,7 @@ class SceneCfg:
     robot_position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     busbar_position: Tuple[float, float, float] = (0.2, 0.0, 0.05)
     ccd_link_names: Tuple[str, ...] = field(
-        default_factory=lambda: ("Link6", "end_effector")
+        default_factory=lambda: ("link6",)  # matches mechArm 270-Pi URDF link name (lowercase)
     )
 
 
