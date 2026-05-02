@@ -31,11 +31,13 @@ for module in (
     "omni.isaac.core.utils",
     "omni.isaac.core.utils.stage",
     "omni.isaac.core.articulations",
+    "omni.isaac.core.objects",
     "omni.isaac.motion_generation",
     "pxr",
     "pxr.Gf",
     "pxr.UsdPhysics",
     "pxr.PhysxSchema",
     "pxr.Usd",
+    "pxr.UsdGeom",
 ):
     _stub(module)

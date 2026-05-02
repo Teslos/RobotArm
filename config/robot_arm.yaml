@@ -27,3 +27,12 @@ safeguards:
 controller:
   rmpflow_timeout_s: 5.0
   stall_velocity_threshold: 0.001
+
+scene:
+  robot_usd_path: assets/mecharm_270/mecharm_270.usd
+  busbar_usd_path: assets/busbar/busbar.usd
+  robot_prim_path: /World/mecharm_270
+  busbar_prim_path: /World/busbar
+  robot_position: [0.0, 0.0, 0.0]
+  busbar_position: [0.2, 0.0, 0.05]
+  ccd_link_names: [Link6, end_effector]

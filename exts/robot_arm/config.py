@@ -1,7 +1,10 @@
 """Typed configuration dataclasses mirroring config/robot_arm.yaml."""
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Tuple
 import math
+import os
+
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "assets")
 
 
 @dataclass
@@ -53,6 +56,27 @@ class ControllerCfg:
 
 
 @dataclass
+class SceneCfg:
+    robot_usd_path: str = field(
+        default_factory=lambda: os.path.normpath(
+            os.path.join(_ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
+        )
+    )
+    busbar_usd_path: str = field(
+        default_factory=lambda: os.path.normpath(
+            os.path.join(_ASSETS_DIR, "busbar", "busbar.usd")
+        )
+    )
+    robot_prim_path: str = "/World/mecharm_270"
+    busbar_prim_path: str = "/World/busbar"
+    robot_position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    busbar_position: Tuple[float, float, float] = (0.2, 0.0, 0.05)
+    ccd_link_names: Tuple[str, ...] = field(
+        default_factory=lambda: ("Link6", "end_effector")
+    )
+
+
+@dataclass
 class RobotArmCfg:
     physics: PhysicsCfg = field(default_factory=PhysicsCfg)
     articulation: ArticulationCfg = field(default_factory=ArticulationCfg)
@@ -61,3 +85,4 @@ class RobotArmCfg:
     sensor: SensorCfg = field(default_factory=SensorCfg)
     safeguard: SafeguardCfg = field(default_factory=SafeguardCfg)
     controller: ControllerCfg = field(default_factory=ControllerCfg)
+    scene: SceneCfg = field(default_factory=SceneCfg)
