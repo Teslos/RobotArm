@@ -33,7 +33,15 @@ URDF_PATH  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.urdf")
 ROBOT_USD  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
 BUSBAR_STL = os.path.join(ASSETS_DIR, "busbar", "busbar.stl")
 BUSBAR_USD = os.path.join(ASSETS_DIR, "busbar", "busbar.usd")
-MESH_DIR   = os.path.join(ASSETS_DIR, "mecharm_270", "meshes")
+MESH_DIR       = os.path.join(ASSETS_DIR, "mecharm_270", "meshes")
+RMPFLOW_DIR    = os.path.join(ASSETS_DIR, "mecharm_270", "rmpflow")
+ROBOT_DESC     = os.path.join(RMPFLOW_DIR, "robot_descriptor.yaml")
+RMPFLOW_CONFIG = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
+
+# mechArm 270-Pi "above busbar centre" joint targets (degrees).
+# Busbar centre ≈ (0.206, 0.202, 0.10) m; target EE height ~0.20 m.
+# Tune joint 1 (base swing) and joints 2-4 (arm elevation) by running with --demo.
+DEMO_JOINT_DEG = [45.0, 60.0, -90.0, 30.0, 0.0, 0.0]
 
 
 # ── Asset conversion helpers ─────────────────────────────────────────────────
@@ -171,17 +179,18 @@ def _get_usd_root_prim_name(usd_path: str) -> str:
     raise RuntimeError(f"No root prims found in {usd_path}")
 
 
-def _build_and_run(cfg, steps: int, app) -> None:
+def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
       2. world.reset()   (initialises articulation, populates dof_names)
       3. configure_articulation  (requires dof_names — must come after reset)
     """
+    import numpy as np
     from omni.isaac.core.articulations import Articulation
     from pxr import Gf, Sdf, Usd, UsdGeom
 
-    from exts.robot_arm.articulation import configure_articulation
+    from exts.robot_arm.articulation import configure_articulation, set_joint_position_targets
     from exts.robot_arm.world import build_world
 
     sc = cfg.scene
@@ -224,12 +233,46 @@ def _build_and_run(cfg, steps: int, app) -> None:
     print(f"[sim] Robot DOF count : {robot.num_dof}")
     print(f"[sim] Robot DOF names : {robot.dof_names}")
     print(f"[sim] Busbar position : {sc.busbar_position}")
+
+    controller = None
+
+    if demo:
+        target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
+        set_joint_position_targets(robot, target_rad)
+        if steps == 0:
+            steps = 600  # 10 s at 60 Hz
+        print(f"[demo] Target joints (deg): {DEMO_JOINT_DEG}")
+        print(f"[demo] Running {steps} steps — watch arm move above busbar centre.")
+
+    elif rmpflow:
+        from exts.robot_arm.controller import RobotArmController
+        controller = RobotArmController(
+            robot=robot,
+            robot_description_path=ROBOT_DESC,
+            rmpflow_config_path=RMPFLOW_CONFIG,
+            urdf_path=URDF_PATH,
+            end_effector_frame_name="link6",
+            cfg=cfg,
+        )
+        controller.reset()
+        busbar_cx = sc.busbar_position[0] + 0.02125 / 2
+        busbar_cy = sc.busbar_position[1] + 0.202
+        busbar_cz = sc.busbar_position[2] + 0.10 + 0.10  # 10 cm above top surface
+        target = np.array([busbar_cx, busbar_cy, busbar_cz])
+        controller.set_end_effector_target(target)
+        if steps == 0:
+            steps = 1200  # 20 s at 60 Hz
+        print(f"[rmpflow] EE target: {target.tolist()} m")
+        print(f"[rmpflow] Running {steps} steps.")
+
     print(f"[sim] Running {'indefinitely (Ctrl+C to stop)' if steps == 0 else str(steps) + ' steps'}...")
 
     step_count = 0
     try:
         while steps == 0 or step_count < steps:
             world.step(render=True)
+            if controller is not None:
+                controller.step()
             step_count += 1
     except KeyboardInterrupt:
         print(f"\n[sim] Stopped after {step_count} steps.")
@@ -244,6 +287,11 @@ def main() -> None:
     parser.add_argument("--headless", action="store_true", help="Run without GUI")
     parser.add_argument("--steps", type=int, default=0,
                         help="Number of physics steps (0 = run until Ctrl+C)")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--demo", action="store_true",
+                      help="Move arm above busbar centre using direct joint targets")
+    mode.add_argument("--rmpflow", action="store_true",
+                      help="Move arm above busbar centre using RMPFlow (needs LULA config files)")
     args = parser.parse_args()
 
     # SimulationApp must be created before any omni.* imports
@@ -265,7 +313,7 @@ def main() -> None:
     else:
         print(f"[asset] Busbar USD found: {BUSBAR_USD}")
 
-    _build_and_run(cfg, args.steps, app)
+    _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow)
 
     app.close()
 

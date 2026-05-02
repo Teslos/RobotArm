@@ -6,10 +6,17 @@ from typing import Optional
 
 import numpy as np
 from omni.isaac.core.articulations import Articulation
-from omni.isaac.motion_generation import ArticulationMotionPolicy, RmpFlow
 
 from .articulation import set_joint_position_targets
 from .config import RobotArmCfg
+
+
+def _import_rmpflow():
+    try:
+        from isaacsim.robot_motion.motion_generation import ArticulationMotionPolicy, RmpFlow
+    except ImportError:
+        from omni.isaac.motion_generation import ArticulationMotionPolicy, RmpFlow  # type: ignore[no-redef]
+    return RmpFlow, ArticulationMotionPolicy
 
 
 class RobotArmController:
@@ -24,17 +31,20 @@ class RobotArmController:
     def __init__(
         self,
         robot: Articulation,
+        robot_description_path: str,
         rmpflow_config_path: str,
+        urdf_path: str,
         end_effector_frame_name: str,
         cfg: RobotArmCfg | None = None,
     ) -> None:
         self._robot = robot
         self._cfg = cfg or RobotArmCfg()
 
+        RmpFlow, ArticulationMotionPolicy = _import_rmpflow()
         self._rmpflow = RmpFlow(
-            robot_description_path=rmpflow_config_path,
+            robot_description_path=robot_description_path,
             rmpflow_config_path=rmpflow_config_path,
-            urdf_path=rmpflow_config_path,
+            urdf_path=urdf_path,
             end_effector_frame_name=end_effector_frame_name,
             maximum_substep_size=self._cfg.physics.dt,
         )

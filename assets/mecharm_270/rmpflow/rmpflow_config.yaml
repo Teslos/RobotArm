@@ -1,0 +1,57 @@
+# RMPFlow configuration for mechArm 270-Pi
+# Tune collision capsules once the arm is visible in the scene.
+
+joint_limit_buffers: [0.05, 0.05, 0.05, 0.05, 0.05, 0.05]
+
+rmpflow:
+    max_velocity_scaling: 1.0
+    max_acceleration_scaling: 1.0
+
+    # ── Null-space attractor ────────────────────────────────────────────────
+    # Keeps the arm near its home pose when the EE has slack.
+    cspace_target_scaling: 1.0
+
+    # ── Collision-avoidance capsules ────────────────────────────────────────
+    # Each entry defines a cylinder (capsule) in the frame of a URDF link.
+    # point1/point2 are the capsule endpoints in the link frame (metres).
+    # radius is in metres.
+    # Start with empty lists — add capsules after observing the arm in the scene.
+    robot_sphere_radius: 0.04
+
+    body_cylinders:
+        - name: link1_cap
+          point1: [0, 0, -0.05]
+          point2: [0, 0,  0.05]
+          radius: 0.035
+          link_name: link1
+
+        - name: link2_cap
+          point1: [0, -0.05, 0]
+          point2: [0,  0.05, 0]
+          radius: 0.030
+          link_name: link2
+
+        - name: link3_cap
+          point1: [-0.05, 0, 0]
+          point2: [ 0.05, 0, 0]
+          radius: 0.028
+          link_name: link3
+
+        - name: link4_cap
+          point1: [-0.03, 0, 0]
+          point2: [ 0.03, 0, 0]
+          radius: 0.025
+          link_name: link4
+
+        - name: link5_cap
+          point1: [-0.03, 0, 0]
+          point2: [ 0.03, 0, 0]
+          radius: 0.025
+          link_name: link5
+
+    end_effector_cylinders:
+        - name: ee_cap
+          point1: [0, 0, 0]
+          point2: [0, 0, 0.03]
+          radius: 0.025
+          link_name: link6
