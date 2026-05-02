@@ -31,16 +31,16 @@ def _configure_physics_scene(world: World, cfg: RobotArmCfg) -> None:
     # Ensure a physics scene prim exists
     scene_prim = stage.GetPrimAtPath(physics_scene_path)
     if not scene_prim.IsValid():
-        UsdPhysics.Scene.Define(stage, physics_scene_path)
-        scene_prim = stage.GetPrimAtPath(physics_scene_path)
+        physics_scene = UsdPhysics.Scene.Define(stage, physics_scene_path)
+    else:
+        physics_scene = UsdPhysics.Scene.Get(stage, physics_scene_path)
 
-    scene_api = UsdPhysics.SceneAPI.Apply(scene_prim)
-    scene_api.CreateGravityDirectionAttr().Set(Gf.Vec3f(*cfg.physics.gravity[:3]))
-    scene_api.CreateGravityMagnitudeAttr().Set(
+    physics_scene.CreateGravityDirectionAttr().Set(Gf.Vec3f(*cfg.physics.gravity[:3]))
+    physics_scene.CreateGravityMagnitudeAttr().Set(
         Gf.Vec3f(*cfg.physics.gravity).GetLength()
     )
 
-    physx_scene = PhysxSchema.PhysxSceneAPI.Apply(scene_prim)
+    physx_scene = PhysxSchema.PhysxSceneAPI.Apply(physics_scene.GetPrim())
     # TGS is more stable than PGS for position-driven actuators
     physx_scene.CreateSolverTypeAttr().Set(cfg.physics.solver)
     physx_scene.CreateTimeStepsPerSecondAttr().Set(

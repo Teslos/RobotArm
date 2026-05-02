@@ -72,12 +72,14 @@ def _patch_urdf(urdf_path: str) -> str:
 
 
 def _convert_urdf_to_usd(app) -> None:
+    import omni.kit.app
     import omni.kit.commands
 
-    # Ensure the URDF importer extension is loaded
-    omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(
-        "omni.importer.urdf", True
-    )
+    # Extension was renamed in Isaac Sim 4.x
+    ext_manager = omni.kit.app.get_app().get_extension_manager()
+    for ext_name in ("isaacsim.asset.importer.urdf", "omni.importer.urdf"):
+        if ext_manager.is_extension_enabled(ext_name) or ext_manager.set_extension_enabled_immediate(ext_name, True):
+            break
 
     os.makedirs(os.path.dirname(ROBOT_USD), exist_ok=True)
     patched = _patch_urdf(URDF_PATH)
@@ -107,34 +109,67 @@ def _convert_urdf_to_usd(app) -> None:
     print(f"[asset] Robot USD written to {ROBOT_USD}")
 
 
-def _convert_stl_to_usd(app) -> None:
+def _convert_stl_to_usd(_app) -> None:
     """
-    Convert busbar.stl to USD by pumping the Kit event loop with app.update().
-    asyncio must NOT be used here — it conflicts with Isaac Sim's own loop.
+    Convert busbar.stl to USD by reading vertices directly and writing a
+    UsdGeom.Mesh — no Kit asset converter needed, so no event-loop pumping
+    and no timeout risk.  STL units are millimetres; we scale to metres.
     """
-    import omni.kit.asset_converter as converter
+    import struct
+    from pxr import Usd, UsdGeom, Vt, Gf
 
     os.makedirs(os.path.dirname(BUSBAR_USD), exist_ok=True)
 
-    ctx  = converter.AssetConverterContext()
-    ctx.ignore_materials = False
-    task = converter.get_instance().create_converter_task(
-        BUSBAR_STL, BUSBAR_USD, None, ctx
-    )
+    with open(BUSBAR_STL, "rb") as f:
+        f.read(80)  # header
+        n_tri = struct.unpack("<I", f.read(4))[0]
+        pts, counts, indices = [], [], []
+        for _ in range(n_tri):
+            f.read(12)  # face normal
+            base = len(pts)
+            for v in range(3):
+                x, y, z = struct.unpack("<fff", f.read(12))
+                pts.append(Gf.Vec3f(x * 0.001, y * 0.001, z * 0.001))
+                indices.append(base + v)
+            counts.append(3)
+            f.read(2)  # attribute byte count
 
-    print("[asset] Converting STL -> USD ", end="", flush=True)
-    while not task.is_finished():
-        app.update()
-        print(".", end="", flush=True)
-    print()
+    stage = Usd.Stage.CreateNew(BUSBAR_USD)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    mesh = UsdGeom.Mesh.Define(stage, "/busbar")
+    mesh.CreatePointsAttr(Vt.Vec3fArray(pts))
+    mesh.CreateFaceVertexCountsAttr(Vt.IntArray(counts))
+    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray(indices))
+    stage.GetRootLayer().Save()
+    print(f"[asset] Busbar USD written to {BUSBAR_USD} ({n_tri} triangles, mm→m scaled)")
 
-    if task.get_error_message():
-        raise RuntimeError(f"STL conversion failed: {task.get_error_message()}")
 
-    print(f"[asset] Busbar USD written to {BUSBAR_USD}")
+def _write_placeholder_busbar_usd(usd_path: str) -> None:
+    """Write a minimal USD file with a box mesh as a busbar stand-in."""
+    from pxr import Usd, UsdGeom, Gf
+    stage = Usd.Stage.CreateNew(usd_path)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
+    cube = UsdGeom.Cube.Define(stage, "/busbar")
+    # Real busbar: 42.5 × 404 × 100 mm  (half-extents × 2 = cube size 2 default)
+    cube.AddScaleOp().Set(Gf.Vec3f(0.02125, 0.202, 0.05))
+    stage.GetRootLayer().Save()
+    print(f"[asset] Placeholder busbar USD written to {usd_path}")
 
 
 # ── Scene builder ────────────────────────────────────────────────────────────
+
+def _get_usd_root_prim_name(usd_path: str) -> str:
+    """Return the name of the first root-level prim in a USD file."""
+    from pxr import Usd
+    stage = Usd.Stage.Open(usd_path)
+    default = stage.GetDefaultPrim()
+    if default and default.IsValid():
+        return default.GetName()
+    # Fall back to the first child of the pseudo-root
+    for prim in stage.GetPseudoRoot().GetChildren():
+        return prim.GetName()
+    raise RuntimeError(f"No root prims found in {usd_path}")
+
 
 def _build_and_run(cfg, steps: int, app) -> None:
     """
@@ -144,8 +179,7 @@ def _build_and_run(cfg, steps: int, app) -> None:
       3. configure_articulation  (requires dof_names — must come after reset)
     """
     from omni.isaac.core.articulations import Articulation
-    from omni.isaac.core.utils.stage import add_reference_to_stage
-    from pxr import Gf, UsdGeom
+    from pxr import Gf, Sdf, Usd, UsdGeom
 
     from exts.robot_arm.articulation import configure_articulation
     from exts.robot_arm.world import build_world
@@ -154,7 +188,13 @@ def _build_and_run(cfg, steps: int, app) -> None:
 
     world = build_world(cfg)
 
-    add_reference_to_stage(usd_path=sc.robot_usd_path, prim_path=sc.robot_prim_path)
+    # Discover the root prim name from the robot USD (URDF robot name may differ
+    # from the file name, e.g. "firefighter").  We need to pass it explicitly
+    # because the importer does not set defaultPrim metadata.
+    robot_usd_root = _get_usd_root_prim_name(sc.robot_usd_path)
+    robot_prim = world.stage.DefinePrim(sc.robot_prim_path)
+    robot_prim.GetReferences().AddReference(sc.robot_usd_path, f"/{robot_usd_root}")
+
     robot = Articulation(
         prim_path=sc.robot_prim_path,
         name="mecharm_270",
@@ -162,7 +202,10 @@ def _build_and_run(cfg, steps: int, app) -> None:
     )
     world.scene.add(robot)
 
-    add_reference_to_stage(usd_path=sc.busbar_usd_path, prim_path=sc.busbar_prim_path)
+    # Busbar placeholder has /busbar as its root prim
+    busbar_usd_root = _get_usd_root_prim_name(sc.busbar_usd_path)
+    busbar_stage_prim = world.stage.DefinePrim(sc.busbar_prim_path)
+    busbar_stage_prim.GetReferences().AddReference(sc.busbar_usd_path, f"/{busbar_usd_root}")
     busbar_prim = world.stage.GetPrimAtPath(sc.busbar_prim_path)
     if not busbar_prim.IsValid():
         raise RuntimeError(
@@ -205,10 +248,7 @@ def main() -> None:
 
     # SimulationApp must be created before any omni.* imports
     from isaacsim import SimulationApp
-    app = SimulationApp(
-        {"headless": args.headless, "width": 1280, "height": 720},
-        argv=["--/privacy/consent=1", "--/privacy/performance=1"],
-    )
+    app = SimulationApp({"headless": args.headless, "width": 1280, "height": 720})
 
     from exts.robot_arm.config import RobotArmCfg
     cfg = RobotArmCfg()

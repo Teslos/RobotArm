@@ -32,8 +32,10 @@ def configure_articulation(
 
 
 def _set_fixed_base(art_prim, fixed: bool) -> None:
-    physx_art = PhysxSchema.PhysxArticulationAPI.Apply(art_prim)
-    physx_art.CreateFixedBaseAttr().Set(fixed)
+    # In Isaac Sim 4.5 / PhysX 5, fixedBase is set by the URDF importer
+    # (fix_base=True → world fixed joint).  PhysxArticulationAPI no longer
+    # exposes CreateFixedBaseAttr, so we just ensure the API is applied.
+    PhysxSchema.PhysxArticulationAPI.Apply(art_prim)
 
 
 def _apply_joint_drives(robot: Articulation, cfg: RobotArmCfg) -> None:
