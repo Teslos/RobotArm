@@ -1,0 +1,20 @@
+name: RobotArm
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - isaacsim==4.5.0
+    - isaacsim-rl==4.5.0
+    - isaacsim-replicator==4.5.0
+    - isaacsim-extscache-physics==4.5.0
+    - isaacsim-extscache-kit==4.5.0
+    - isaacsim-extscache-kit-sdk==4.5.0
+    - torch>=2.2.0
+    - numpy
+    - gymnasium
+    - pyyaml
+    - pytest
+    - pytest-mock

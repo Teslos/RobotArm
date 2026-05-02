@@ -1,0 +1,29 @@
+physics:
+  solver: TGS           # Temporal Gauss-Seidel — more stable than PGS for position drives
+  dt: 0.016667          # 60 Hz (1/60)
+  gravity: [0.0, 0.0, -9.81]
+  up_axis: Z
+
+articulation:
+  fixed_base: true
+  joint_friction: 0.05   # lubricated metal gearbox
+  joint_damping: 1.0
+
+contact:
+  contact_offset: 0.02   # metres — collision begins 2 cm before impact
+  rest_offset: 0.00      # objects sit flush, no air gap
+
+joints:
+  default_stiffness: 400.0
+  default_damping: 40.0  # 2 * sqrt(400) — critical damping
+
+sensors:
+  render_lag_frames: 1   # 1-frame intentional perception lag
+
+safeguards:
+  drift_check_interval: 10000   # steps between origin drift checks
+  max_drift_m: 0.0001           # 0.1 mm tolerance
+
+controller:
+  rmpflow_timeout_s: 5.0
+  stall_velocity_threshold: 0.001
