@@ -20,24 +20,23 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import os
 import sys
 import xml.etree.ElementTree as ET
 
 # ── repo root on path so exts.robot_arm is importable ──────────────────────
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
-ASSETS_DIR   = os.path.join(REPO_ROOT, "assets")
-URDF_PATH    = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.urdf")
-ROBOT_USD    = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
-BUSBAR_STL   = os.path.join(ASSETS_DIR, "busbar", "busbar.stl")
-BUSBAR_USD   = os.path.join(ASSETS_DIR, "busbar", "busbar.usd")
-MESH_DIR     = os.path.join(ASSETS_DIR, "mecharm_270", "meshes")
+ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
+URDF_PATH  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.urdf")
+ROBOT_USD  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
+BUSBAR_STL = os.path.join(ASSETS_DIR, "busbar", "busbar.stl")
+BUSBAR_USD = os.path.join(ASSETS_DIR, "busbar", "busbar.usd")
+MESH_DIR   = os.path.join(ASSETS_DIR, "mecharm_270", "meshes")
 
 
-# ── Asset conversion helpers ────────────────────────────────────────────────
+# ── Asset conversion helpers ─────────────────────────────────────────────────
 
 def _patch_urdf(urdf_path: str) -> str:
     """
@@ -65,7 +64,7 @@ def _patch_urdf(urdf_path: str) -> str:
                 for elem in link.findall(tag):
                     link.remove(elem)
         print("[asset] No .dae meshes found — importing joint structure only.")
-        print(f"        Place .dae files in {MESH_DIR} and re-run for full geometry.")
+        print(f"        Place .dae files in {MESH_DIR} and delete {ROBOT_USD} to re-import.")
 
     patched = urdf_path.replace(".urdf", "_patched.urdf")
     tree.write(patched, xml_declaration=True, encoding="unicode")
@@ -75,18 +74,22 @@ def _patch_urdf(urdf_path: str) -> str:
 def _convert_urdf_to_usd(app) -> None:
     import omni.kit.commands
 
+    # Ensure the URDF importer extension is loaded
+    omni.kit.app.get_app().get_extension_manager().set_extension_enabled_immediate(
+        "omni.importer.urdf", True
+    )
+
     os.makedirs(os.path.dirname(ROBOT_USD), exist_ok=True)
+    patched = _patch_urdf(URDF_PATH)
 
     _, import_config = omni.kit.commands.execute("URDFCreateImportConfig")
-    import_config.merge_fixed_joints   = False   # keep full link hierarchy for CCD
-    import_config.fix_base             = True    # spec §1.3
+    import_config.merge_fixed_joints    = False
+    import_config.fix_base              = True
     import_config.import_inertia_tensor = True
-    import_config.distance_scale       = 1.0     # URDF is in metres
-    import_config.create_physics_scene = False   # world.py owns the physics scene
-    import_config.convex_decomp        = False   # convex hull per spec §3.3
-    import_config.self_collision       = False   # collision groups in world.py
-
-    patched = _patch_urdf(URDF_PATH)
+    import_config.distance_scale        = 1.0
+    import_config.create_physics_scene  = False
+    import_config.convex_decomp         = False
+    import_config.self_collision        = False
 
     status, _ = omni.kit.commands.execute(
         "URDFParseAndImportFile",
@@ -99,12 +102,16 @@ def _convert_urdf_to_usd(app) -> None:
         os.remove(patched)
 
     if not status:
-        raise RuntimeError(f"URDF import failed. Check {URDF_PATH} and Isaac Sim logs.")
+        raise RuntimeError("URDF import failed — check Isaac Sim logs.")
 
     print(f"[asset] Robot USD written to {ROBOT_USD}")
 
 
-async def _convert_stl_to_usd_async() -> None:
+def _convert_stl_to_usd(app) -> None:
+    """
+    Convert busbar.stl to USD by pumping the Kit event loop with app.update().
+    asyncio must NOT be used here — it conflicts with Isaac Sim's own loop.
+    """
     import omni.kit.asset_converter as converter
 
     os.makedirs(os.path.dirname(BUSBAR_USD), exist_ok=True)
@@ -114,18 +121,27 @@ async def _convert_stl_to_usd_async() -> None:
     task = converter.get_instance().create_converter_task(
         BUSBAR_STL, BUSBAR_USD, None, ctx
     )
-    success = await task.wait_until_finished()
-    if not success:
+
+    print("[asset] Converting STL -> USD ", end="", flush=True)
+    while not task.is_finished():
+        app.update()
+        print(".", end="", flush=True)
+    print()
+
+    if task.get_error_message():
         raise RuntimeError(f"STL conversion failed: {task.get_error_message()}")
+
     print(f"[asset] Busbar USD written to {BUSBAR_USD}")
 
 
-# ── Scene builder (correct ordering: configure drives AFTER world.reset()) ──
+# ── Scene builder ────────────────────────────────────────────────────────────
 
 def _build_and_run(cfg, steps: int, app) -> None:
     """
-    Build the scene manually so configure_articulation is called AFTER
-    world.reset() — Isaac Sim populates dof_names only during initialization.
+    Build the scene in the correct order:
+      1. USD prim setup  (before world.reset)
+      2. world.reset()   (initialises articulation, populates dof_names)
+      3. configure_articulation  (requires dof_names — must come after reset)
     """
     from omni.isaac.core.articulations import Articulation
     from omni.isaac.core.utils.stage import add_reference_to_stage
@@ -136,10 +152,8 @@ def _build_and_run(cfg, steps: int, app) -> None:
 
     sc = cfg.scene
 
-    # 1. World (TGS solver, Z-up, collision groups)
     world = build_world(cfg)
 
-    # 2. Robot USD reference
     add_reference_to_stage(usd_path=sc.robot_usd_path, prim_path=sc.robot_prim_path)
     robot = Articulation(
         prim_path=sc.robot_prim_path,
@@ -148,7 +162,6 @@ def _build_and_run(cfg, steps: int, app) -> None:
     )
     world.scene.add(robot)
 
-    # 3. Busbar as static reference (position via USD translate op)
     add_reference_to_stage(usd_path=sc.busbar_usd_path, prim_path=sc.busbar_prim_path)
     busbar_prim = world.stage.GetPrimAtPath(sc.busbar_prim_path)
     if not busbar_prim.IsValid():
@@ -160,10 +173,9 @@ def _build_and_run(cfg, steps: int, app) -> None:
     xform.ClearXformOpOrder()
     xform.AddTranslateOp().Set(Gf.Vec3d(*sc.busbar_position))
 
-    # 4. Initialize — MUST precede configure_articulation (populates dof_names)
+    # Initialise articulation — dof_names populated after this call
     world.reset()
 
-    # 5. Apply joint drives / limits / CCD now that articulation is initialised
     configure_articulation(robot, cfg, ccd_link_names=tuple(sc.ccd_link_names))
 
     print(f"[sim] Robot DOF count : {robot.num_dof}")
@@ -171,7 +183,6 @@ def _build_and_run(cfg, steps: int, app) -> None:
     print(f"[sim] Busbar position : {sc.busbar_position}")
     print(f"[sim] Running {'indefinitely (Ctrl+C to stop)' if steps == 0 else str(steps) + ' steps'}...")
 
-    # 6. Physics loop
     step_count = 0
     try:
         while steps == 0 or step_count < steps:
@@ -194,12 +205,14 @@ def main() -> None:
 
     # SimulationApp must be created before any omni.* imports
     from isaacsim import SimulationApp
-    app = SimulationApp({"headless": args.headless, "width": 1280, "height": 720})
+    app = SimulationApp(
+        {"headless": args.headless, "width": 1280, "height": 720},
+        argv=["--/privacy/consent=1", "--/privacy/performance=1"],
+    )
 
     from exts.robot_arm.config import RobotArmCfg
     cfg = RobotArmCfg()
 
-    # Convert assets on first run
     if not os.path.exists(ROBOT_USD):
         print("[asset] Converting URDF -> USD (first run)...")
         _convert_urdf_to_usd(app)
@@ -208,7 +221,7 @@ def main() -> None:
 
     if not os.path.exists(BUSBAR_USD):
         print("[asset] Converting STL -> USD (first run)...")
-        asyncio.get_event_loop().run_until_complete(_convert_stl_to_usd_async())
+        _convert_stl_to_usd(app)
     else:
         print(f"[asset] Busbar USD found: {BUSBAR_USD}")
 
