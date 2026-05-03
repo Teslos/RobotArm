@@ -31,3 +31,10 @@ _isaac_sim/
 # OS
 .DS_Store
 Thumbs.db
+
+# Claude Code local config
+.claude/
+
+# Generated USD assets (regenerated on first sim run)
+assets/busbar/busbar.usd
+assets/mecharm_270/mecharm_270_patched.urdf
