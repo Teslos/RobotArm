@@ -182,6 +182,27 @@ def _get_usd_root_prim_name(usd_path: str) -> str:
     raise RuntimeError(f"No root prims found in {usd_path}")
 
 
+def _set_viewport_camera() -> None:
+    """Point the default viewport at the arm + busbar from a 45-degree isometric angle.
+
+    Eye at (0.55, -0.45, 0.45) looks toward the workspace centre (0.1, 0.0, 0.12),
+    giving a clear view of the full arm and the busbar on the table.
+    """
+    try:
+        from isaacsim.core.utils.viewports import set_camera_view
+    except ImportError:
+        try:
+            from omni.isaac.core.utils.viewports import set_camera_view  # type: ignore[no-redef]
+        except ImportError:
+            return  # viewport API not available — skip silently
+    import numpy as np
+    set_camera_view(
+        eye=np.array([0.55, -0.45, 0.45]),
+        target=np.array([0.10, 0.00, 0.12]),
+        camera_prim_path="/OmniverseKit_Persp",
+    )
+
+
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
                    headless: bool = False, render_interval: int = 1) -> None:
     """
@@ -232,6 +253,9 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     # Initialise articulation — dof_names populated after this call
     world.reset()
 
+    if not headless:
+        _set_viewport_camera()
+
     configure_articulation(robot, cfg, ccd_link_names=tuple(sc.ccd_link_names))
 
     print(f"[sim] Robot DOF count : {robot.num_dof}")
@@ -242,10 +266,12 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
 
     if demo:
         target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
+        initial_pos_deg = np.degrees(robot.get_joint_positions()).tolist()
+        print(f"[demo] Initial joints (deg): {[round(v,1) for v in initial_pos_deg]}")
         set_joint_position_targets(robot, target_rad)
         if steps == 0:
             steps = 600  # 10 s at 60 Hz
-        print(f"[demo] Target joints (deg): {DEMO_JOINT_DEG}")
+        print(f"[demo] Target  joints (deg): {DEMO_JOINT_DEG}")
         print(f"[demo] Running {steps} steps — watch arm move above busbar centre.")
 
     elif rmpflow:
@@ -285,6 +311,16 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
             step_count += 1
     except KeyboardInterrupt:
         print(f"\n[sim] Stopped after {step_count} steps.")
+
+    if demo:
+        final_pos_deg = np.degrees(robot.get_joint_positions()).tolist()
+        target_deg = DEMO_JOINT_DEG
+        print(f"[demo] Final   joints (deg): {[round(v,1) for v in final_pos_deg]}")
+        print(f"[demo] Target  joints (deg): {target_deg}")
+        errors = [abs(f - t) for f, t in zip(final_pos_deg, target_deg)]
+        print(f"[demo] Errors          (deg): {[round(e,2) for e in errors]}")
+        moved = any(abs(f - i) > 1.0 for f, i in zip(final_pos_deg, initial_pos_deg))
+        print(f"[demo] Arm moved: {'YES' if moved else 'NO — joints did not change'}")
 
     print("[sim] Done.")
 
