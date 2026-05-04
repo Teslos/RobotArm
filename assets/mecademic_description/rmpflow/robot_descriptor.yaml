@@ -1,0 +1,80 @@
+# LULA Robot Descriptor — Mecademic Meca500 R3
+# Generated from meca500r3.urdf joint data.
+#
+# Joint chain (all revolute):
+#   meca_base_link
+#     -> meca_axis_1_joint (z-axis,  xyz=0.012498 0 0.091, +-175 deg)
+#     -> meca_axis_2_joint (y-axis,  xyz=0 0 0.044,        -70..90 deg)
+#     -> meca_axis_3_joint (y-axis,  xyz=0 0 0.135,       -135..70 deg)
+#     -> meca_axis_4_joint (x-axis,  xyz=0 0 0.038,        +-170 deg)
+#     -> meca_axis_5_joint (y-axis,  xyz=0.12 0 0,         +-115 deg)
+#     -> meca_axis_6_joint (x-axis,  xyz=0.07 0 0,         +-180 deg)
+#     -> meca_axis_6_link  (EE)
+
+api_version: 1.0
+
+cspace:
+    - meca_axis_1_joint
+    - meca_axis_2_joint
+    - meca_axis_3_joint
+    - meca_axis_4_joint
+    - meca_axis_5_joint
+    - meca_axis_6_joint
+
+root_link: meca_base_link
+
+default_q: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+# From URDF <limit velocity="...">
+# J1-J2: 2.618 rad/s (150 deg/s), J3: 3.14 (180), J4-J5: 5.24 (300), J6: 8.73 (500)
+# acceleration_limits: conservative values for compact desktop robot (not in URDF)
+acceleration_limits: [10.0, 10.0, 10.0, 15.0, 15.0, 20.0]
+jerk_limits:         [500.0, 500.0, 500.0, 750.0, 750.0, 1000.0]
+
+# Collision spheres: defined in each link's local frame.
+# Sphere chains follow the structural body between joints.
+# Radii ~25 mm for proximal links, ~18 mm for distal.
+collision_spheres:
+    - meca_base_link:
+        - "center": [0.0, 0.0, 0.03]
+          "radius": 0.04
+        - "center": [0.0, 0.0, 0.07]
+          "radius": 0.035
+
+    - meca_axis_1_link:
+        # Body between J1 (at base+91mm) and J2 (+44mm above, local z)
+        - "center": [0.0, 0.0, 0.02]
+          "radius": 0.030
+
+    - meca_axis_2_link:
+        # Upper arm: J2 to J3 is 135 mm along local z
+        - "center": [0.0, 0.0, 0.03]
+          "radius": 0.025
+        - "center": [0.0, 0.0, 0.07]
+          "radius": 0.025
+        - "center": [0.0, 0.0, 0.11]
+          "radius": 0.025
+
+    - meca_axis_3_link:
+        # Elbow: J3 to J4 is 38 mm along local z
+        - "center": [0.0, 0.0, 0.019]
+          "radius": 0.025
+
+    - meca_axis_4_link:
+        # Forearm: J4 to J5 is 120 mm along local x
+        - "center": [0.04, 0.0, 0.0]
+          "radius": 0.022
+        - "center": [0.08, 0.0, 0.0]
+          "radius": 0.022
+        - "center": [0.11, 0.0, 0.0]
+          "radius": 0.020
+
+    - meca_axis_5_link:
+        # Wrist: J5 to J6 is 70 mm along local x
+        - "center": [0.035, 0.0, 0.0]
+          "radius": 0.018
+
+    - meca_axis_6_link:
+        # End-effector tip
+        - "center": [0.0, 0.0, 0.0]
+          "radius": 0.015
