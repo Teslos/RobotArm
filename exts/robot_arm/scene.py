@@ -9,7 +9,7 @@ from omni.isaac.core.utils.stage import add_reference_to_stage
 from pxr import Gf, UsdGeom
 
 from .config import RobotArmCfg
-from .robots.mecharm import load_mecharm_270
+from .robots.meca500 import load_meca500
 from .world import build_world
 
 
@@ -25,7 +25,7 @@ def build_scene(cfg: RobotArmCfg | None = None) -> Tuple[World, Articulation, An
         cfg = RobotArmCfg()
 
     world = build_world(cfg)
-    robot = load_mecharm_270(world, cfg)
+    robot = load_meca500(world, cfg)
     busbar = _load_busbar(world, cfg)
 
     return world, robot, busbar

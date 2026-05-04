@@ -1,6 +1,6 @@
 """Typed configuration dataclasses mirroring config/robot_arm.yaml."""
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import math
 import os
 
@@ -20,6 +20,10 @@ class ArticulationCfg:
     fixed_base: bool = True
     joint_friction: float = 0.05
     joint_damping: float = 1.0
+    # Density applied to all rigid body links (kg/m³).
+    # PhysX computes mass + inertia tensor from convex hull volume × density.
+    # 2700 = aluminium (Meca500 R3 construction).
+    link_density: float = 2700.0
 
 
 @dataclass
@@ -59,7 +63,7 @@ class ControllerCfg:
 class SceneCfg:
     robot_usd_path: str = field(
         default_factory=lambda: os.path.normpath(
-            os.path.join(_ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
+            os.path.join(_ASSETS_DIR, "mecademic_description", "urdf", "meca500r3.usd")
         )
     )
     busbar_usd_path: str = field(
@@ -67,12 +71,31 @@ class SceneCfg:
             os.path.join(_ASSETS_DIR, "busbar", "busbar.usd")
         )
     )
-    robot_prim_path: str = "/World/mecharm_270"
+    robot_prim_path: str = "/World/meca500r3"
     busbar_prim_path: str = "/World/busbar"
     robot_position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    busbar_position: Tuple[float, float, float] = (0.2, 0.0, 0.05)
+    busbar_position: Tuple[float, float, float] = (0.15, 0.0, 0.03)
     ccd_link_names: Tuple[str, ...] = field(
-        default_factory=lambda: ("link6",)  # matches mechArm 270-Pi URDF link name (lowercase)
+        default_factory=lambda: ("meca_axis_6_link",)  # EE link from Meca500 R3 URDF
+    )
+
+
+@dataclass
+class GridSearchCfg:
+    """Configuration for IK-based workspace grid search."""
+    # Cartesian search volume (metres), centred loosely over the busbar
+    x_range: Tuple[float, float] = (0.10, 0.35)
+    y_range: Tuple[float, float] = (-0.25, 0.25)
+    z_range: Tuple[float, float] = (0.10, 0.35)
+    # Grid resolution in each axis
+    nx: int = 8
+    ny: int = 8
+    nz: int = 5
+    # EE orientations to attempt per grid point: (qw, qx, qy, qz) or None
+    # None = position-only IK (no orientation constraint) — maximises reachable fraction.
+    # Add explicit orientations (e.g. "pointing down") to filter for approach angle.
+    orientations: Tuple[Optional[Tuple[float, float, float, float]], ...] = field(
+        default_factory=lambda: (None,)
     )
 
 

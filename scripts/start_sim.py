@@ -29,31 +29,32 @@ REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO_ROOT)
 
 ASSETS_DIR = os.path.join(REPO_ROOT, "assets")
-URDF_PATH  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.urdf")
-ROBOT_USD  = os.path.join(ASSETS_DIR, "mecharm_270", "mecharm_270.usd")
+URDF_PATH  = os.path.join(ASSETS_DIR, "mecademic_description", "urdf", "meca500r3.urdf")
+ROBOT_USD  = os.path.join(ASSETS_DIR, "mecademic_description", "urdf", "meca500r3.usd")
 BUSBAR_STL = os.path.join(ASSETS_DIR, "busbar", "busbar.stl")
 BUSBAR_USD = os.path.join(ASSETS_DIR, "busbar", "busbar.usd")
-MESH_DIR       = os.path.join(ASSETS_DIR, "mecharm_270", "meshes")
-RMPFLOW_DIR    = os.path.join(ASSETS_DIR, "mecharm_270", "rmpflow")
+MESH_DIR       = os.path.join(ASSETS_DIR, "mecademic_description", "meshes")
+RMPFLOW_DIR    = os.path.join(ASSETS_DIR, "mecademic_description", "rmpflow")
 ROBOT_DESC     = os.path.join(RMPFLOW_DIR, "robot_descriptor.yaml")
 RMPFLOW_CONFIG = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
 
-# mechArm 270-Pi "above busbar centre" joint targets (degrees).
-# Busbar centre ≈ (0.206, 0.202, 0.10) m; target EE height ~0.20 m.
-# Tune joint 1 (base swing) and joints 2-4 (arm elevation) by running with --demo.
-DEMO_JOINT_DEG = [45.0, 60.0, -90.0, 30.0, 0.0, 0.0]
+# Meca500 R3 joint targets (degrees) to position EE ~10 cm above busbar centre.
+# Busbar at (0.15, 0.0, 0.03); top surface z ≈ 0.08 m; approach at z ≈ 0.18 m.
+# Tune with --demo; joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°,
+#   J4 ±170°, J5 ±115°, J6 ±180°.
+DEMO_JOINT_DEG = [0.0, -45.0, 45.0, 0.0, -45.0, 0.0]
 
 
 # ── Asset conversion helpers ─────────────────────────────────────────────────
 
 def _patch_urdf(urdf_path: str) -> str:
     """
-    Resolve package:// mesh paths to absolute paths if .dae files exist in
-    MESH_DIR, otherwise strip visual/collision elements so import still works.
-    Writes a patched URDF next to the original and returns its path.
+    Resolve package:// mesh URIs to absolute paths when mesh files exist in
+    MESH_DIR, otherwise strip visual/collision elements so the import still
+    works (joints-only mode).  Handles both .dae and .stl mesh references.
     """
     has_meshes = os.path.isdir(MESH_DIR) and any(
-        f.endswith(".dae") for f in os.listdir(MESH_DIR)
+        f.endswith((".dae", ".stl")) for f in os.listdir(MESH_DIR)
     )
 
     tree = ET.parse(urdf_path)
@@ -62,17 +63,19 @@ def _patch_urdf(urdf_path: str) -> str:
     if has_meshes:
         for mesh_elem in root.iter("mesh"):
             fn = mesh_elem.get("filename", "")
-            if fn.startswith("package://mycobot_description/urdf/mecharm_270_pi/"):
+            if fn.startswith("package://"):
                 basename = os.path.basename(fn)
-                mesh_elem.set("filename", os.path.join(MESH_DIR, basename))
+                abs_path = os.path.join(MESH_DIR, basename)
+                if os.path.exists(abs_path):
+                    mesh_elem.set("filename", abs_path)
         print(f"[asset] Using meshes from {MESH_DIR}")
     else:
         for link in root.iter("link"):
             for tag in ("visual", "collision"):
                 for elem in link.findall(tag):
                     link.remove(elem)
-        print("[asset] No .dae meshes found — importing joint structure only.")
-        print(f"        Place .dae files in {MESH_DIR} and delete {ROBOT_USD} to re-import.")
+        print("[asset] No mesh files found — importing joint structure only.")
+        print(f"        Place .dae/.stl files in {MESH_DIR} and delete {ROBOT_USD} to re-import.")
 
     patched = urdf_path.replace(".urdf", "_patched.urdf")
     tree.write(patched, xml_declaration=True, encoding="unicode")
@@ -179,7 +182,8 @@ def _get_usd_root_prim_name(usd_path: str) -> str:
     raise RuntimeError(f"No root prims found in {usd_path}")
 
 
-def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False) -> None:
+def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
+                   headless: bool = False, render_interval: int = 1) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
@@ -206,7 +210,7 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
 
     robot = Articulation(
         prim_path=sc.robot_prim_path,
-        name="mecharm_270",
+        name="meca500r3",
         position=list(sc.robot_position),
     )
     world.scene.add(robot)
@@ -251,26 +255,31 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
             robot_description_path=ROBOT_DESC,
             rmpflow_config_path=RMPFLOW_CONFIG,
             urdf_path=URDF_PATH,
-            end_effector_frame_name="link6",
+            end_effector_frame_name="meca_axis_6_link",
             cfg=cfg,
         )
         controller.reset()
-        busbar_cx = sc.busbar_position[0] + 0.02125 / 2
-        busbar_cy = sc.busbar_position[1] + 0.202
-        busbar_cz = sc.busbar_position[2] + 0.10 + 0.10  # 10 cm above top surface
-        target = np.array([busbar_cx, busbar_cy, busbar_cz])
+        # Busbar half-height is 0.05 m (cube scale z=0.05); approach 10 cm above.
+        busbar_top_z = sc.busbar_position[2] + 0.05
+        target = np.array([sc.busbar_position[0], sc.busbar_position[1], busbar_top_z + 0.10])
         controller.set_end_effector_target(target)
         if steps == 0:
             steps = 1200  # 20 s at 60 Hz
         print(f"[rmpflow] EE target: {target.tolist()} m")
         print(f"[rmpflow] Running {steps} steps.")
 
+    if headless:
+        print("[sim] Headless mode — rendering disabled (saves GPU/CPU heat).")
+    elif render_interval > 1:
+        print(f"[sim] Rendering every {render_interval} steps (~{60 // render_interval} FPS visual).")
+
     print(f"[sim] Running {'indefinitely (Ctrl+C to stop)' if steps == 0 else str(steps) + ' steps'}...")
 
     step_count = 0
     try:
         while steps == 0 or step_count < steps:
-            world.step(render=True)
+            do_render = (not headless) and (step_count % render_interval == 0)
+            world.step(render=do_render)
             if controller is not None:
                 controller.step()
             step_count += 1
@@ -287,6 +296,10 @@ def main() -> None:
     parser.add_argument("--headless", action="store_true", help="Run without GUI")
     parser.add_argument("--steps", type=int, default=0,
                         help="Number of physics steps (0 = run until Ctrl+C)")
+    parser.add_argument("--render-interval", type=int, default=1, metavar="N",
+                        help="Render every N physics steps (default: 1 = every step). "
+                             "E.g. --render-interval 4 gives ~15 FPS visual at 60 Hz physics. "
+                             "Ignored in --headless mode.")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--demo", action="store_true",
                       help="Move arm above busbar centre using direct joint targets")
@@ -313,7 +326,8 @@ def main() -> None:
     else:
         print(f"[asset] Busbar USD found: {BUSBAR_USD}")
 
-    _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow)
+    _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow,
+                   headless=args.headless, render_interval=args.render_interval)
 
     app.close()
 

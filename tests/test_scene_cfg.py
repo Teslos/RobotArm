@@ -1,4 +1,4 @@
-"""Unit tests for SceneCfg — no Isaac Sim required."""
+"""Unit tests for SceneCfg -- no Isaac Sim required."""
 import pytest
 from exts.robot_arm.config import SceneCfg, RobotArmCfg
 
@@ -6,7 +6,7 @@ from exts.robot_arm.config import SceneCfg, RobotArmCfg
 class TestSceneCfgDefaults:
     def test_prim_paths(self):
         sc = SceneCfg()
-        assert sc.robot_prim_path == "/World/mecharm_270"
+        assert sc.robot_prim_path == "/World/meca500r3"
         assert sc.busbar_prim_path == "/World/busbar"
 
     def test_robot_position_at_origin(self):
@@ -17,7 +17,7 @@ class TestSceneCfgDefaults:
         sc = SceneCfg()
         x, y, z = sc.busbar_position
         reach = (x**2 + y**2 + z**2) ** 0.5
-        assert reach <= 0.27, "Default busbar position must be within 270 mm reach"
+        assert reach <= 0.22, "Default busbar position must be within Meca500 R3 reach (~220 mm)"
 
     def test_usd_paths_are_strings(self):
         sc = SceneCfg()
@@ -26,12 +26,12 @@ class TestSceneCfgDefaults:
 
     def test_usd_paths_contain_expected_filenames(self):
         sc = SceneCfg()
-        assert "mecharm_270" in sc.robot_usd_path
+        assert "meca500r3" in sc.robot_usd_path
         assert "busbar" in sc.busbar_usd_path
 
-    def test_ccd_link_names_contains_link6(self):
+    def test_ccd_link_names_contains_meca_axis_6(self):
         sc = SceneCfg()
-        assert "link6" in sc.ccd_link_names  # lowercase — matches mechArm 270-Pi URDF
+        assert "meca_axis_6_link" in sc.ccd_link_names  # EE link from Meca500 R3 URDF
 
 
 class TestSceneCfgOverrides:
@@ -55,4 +55,4 @@ class TestRobotArmCfgScene:
 
     def test_scene_field_uses_correct_defaults(self):
         cfg = RobotArmCfg()
-        assert cfg.scene.robot_prim_path == "/World/mecharm_270"
+        assert cfg.scene.robot_prim_path == "/World/meca500r3"

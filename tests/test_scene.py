@@ -1,4 +1,4 @@
-"""Unit tests for build_scene and _load_busbar — mocks out Isaac Sim."""
+"""Unit tests for build_scene and _load_busbar -- mocks out Isaac Sim."""
 import pytest
 from unittest.mock import MagicMock, patch, call
 
@@ -9,7 +9,7 @@ def _make_cfg():
     return RobotArmCfg()
 
 
-@patch("exts.robot_arm.scene.load_mecharm_270")
+@patch("exts.robot_arm.scene.load_meca500")
 @patch("exts.robot_arm.scene.build_world")
 class TestBuildScene:
     def test_returns_three_tuple(self, mock_build_world, mock_load_robot):
@@ -36,7 +36,7 @@ class TestBuildScene:
 
         mock_build_world.assert_called_once_with(cfg)
 
-    def test_load_mecharm_called_with_world_and_cfg(self, mock_build_world, mock_load_robot):
+    def test_load_meca500_called_with_world_and_cfg(self, mock_build_world, mock_load_robot):
         from exts.robot_arm.scene import build_scene
 
         mock_world = MagicMock()
@@ -82,7 +82,7 @@ class TestBuildScene:
         assert len(result) == 3
 
 
-@patch("exts.robot_arm.scene.load_mecharm_270")
+@patch("exts.robot_arm.scene.load_meca500")
 @patch("exts.robot_arm.scene.build_world")
 @patch("exts.robot_arm.scene.add_reference_to_stage")
 class TestLoadBusbar:

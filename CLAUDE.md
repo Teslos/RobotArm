@@ -5,6 +5,13 @@
 - Run commands: `micromamba run -n RobotArm python ...`
 - Run tests: `micromamba run -n RobotArm python -m pytest tests/ --tb=short -q`
 
+## Robot
+**Mecademic Meca500 R3** — 6-DOF desktop robot
+- URDF: `assets/mecademic_description/urdf/meca500r3.urdf`
+- Meshes: `assets/mecademic_description/meshes/` (.dae visual + .stl collision)
+- EE link: `meca_axis_6_link`
+- Joint limits (deg): J1 ±175, J2 -70→90, J3 -135→70, J4 ±170, J5 ±115, J6 ±180
+
 ## Project layout
 ```
 exts/robot_arm/     # Main package (Isaac Sim extension)
@@ -14,16 +21,18 @@ exts/robot_arm/     # Main package (Isaac Sim extension)
   sensors.py        # LaggedSensor / LaggedCamera / LaggedLidar
   safeguards.py     # SafeguardManager: teleport guard + drift re-centering
   controller.py     # RobotArmController: RMPFlow + stall monitor
+  robots/meca500.py # load_meca500(): USD reference + articulation setup
+  tasks/workspace_mapper.py  # WorkspaceMapper: IK grid search for reachability
 config/robot_arm.yaml   # YAML mirror of default config values
 docs/specs.md           # Full design specification
-tests/                  # Unit tests (no Isaac Sim required — omni/pxr stubbed)
+tests/                  # Unit tests (no Isaac Sim required -- omni/pxr stubbed)
 ```
 
 ## Key design decisions (from docs/specs.md)
 - **Solver:** TGS at 60 Hz, 1:1 physics/RMPFlow sync
 - **Articulation:** `fixed_base=True`, position drives, hard joint limits
 - **Damping:** Critical damping `D = 2√K` per joint
-- **CCD:** Enabled on `end_effector` and `sensor_arm` links only
+- **CCD:** Enabled on `meca_axis_6_link` (EE) only
 - **Contact offsets:** contact=0.02 m, rest=0.00 m
 - **Sensor lag:** Intentional 1-frame render lag for camera/lidar (mimics real hardware)
 - **World:** Z-Up

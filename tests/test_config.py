@@ -31,4 +31,4 @@ def test_robot_arm_cfg_defaults():
     assert cfg.controller.rmpflow_timeout_s == 5.0
     assert cfg.controller.stall_velocity_threshold == 1e-3
     assert isinstance(cfg.scene, SceneCfg)
-    assert cfg.scene.robot_prim_path == "/World/mecharm_270"
+    assert cfg.scene.robot_prim_path == "/World/meca500r3"
