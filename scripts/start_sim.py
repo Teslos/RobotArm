@@ -188,6 +188,16 @@ def _get_usd_root_prim_name(usd_path: str) -> str:
     raise RuntimeError(f"No root prims found in {usd_path}")
 
 
+def _acquire_draw():
+    """Return (draw_interface, carb) or (None, None) if debug draw is unavailable."""
+    try:
+        import carb
+        import omni.debugdraw
+        return omni.debugdraw.get_debug_draw_interface(), carb
+    except Exception:
+        return None, None
+
+
 def _set_viewport_camera() -> None:
     """Point the default viewport at the arm + busbar from a 45-degree isometric angle.
 
@@ -271,6 +281,11 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     controller = None
     scan_waypoints: list = []
     scan_step_thresholds: list = []
+    _draw = None
+    _carb = None
+    _scan_prev_ee = [None]  # last EE Float3 for trail drawing
+    _plan_lines: list = []  # static planned-path draw calls
+    _trail_lines: list = []  # growing EE trail draw calls
 
     if demo:
         target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
@@ -329,6 +344,29 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         for i, wp in enumerate(scan_waypoints):
             print(f"[scan]   WP{i}: {wp.tolist()}  ({scan_waypoint_steps[i]} steps)")
         print(f"[scan] Total: {steps} steps ({steps/60:.0f} s)")
+        # ── debug visualisation ───────────────────────────────────────────
+        # omni.debugdraw is IMMEDIATE MODE: lines are cleared after every
+        # render frame, so they must be redrawn on each world.step(render=True).
+        _draw, _carb = _acquire_draw()
+        # Pre-build static line list for the planned path (orange)
+        _plan_lines: list = []  # each entry: (p0, col, w, p1, col, w)
+        if _draw is not None:
+            for i in range(len(scan_waypoints) - 1):
+                p0 = _carb.Float3(*scan_waypoints[i].tolist())
+                p1 = _carb.Float3(*scan_waypoints[i + 1].tolist())
+                _plan_lines.append((p0, 0xFFFF8800, 6.0, p1, 0xFFFF8800, 6.0))
+            r = 0.008  # cross-hair arm length (m)
+            for wp in scan_waypoints:
+                x, y, z = wp.tolist()
+                for dx, dy, dz in [(r,0,0),(0,r,0),(0,0,r)]:
+                    _plan_lines.append((
+                        _carb.Float3(x-dx, y-dy, z-dz), 0xFFFF8800, 4.0,
+                        _carb.Float3(x+dx, y+dy, z+dz), 0xFFFF8800, 4.0,
+                    ))
+            print("[scan] Debug draw ready — orange plan + cyan trail will render each frame.")
+        else:
+            print("[scan] omni.debugdraw not available — viewport lines disabled.")
+        _trail_lines: list = []    # grows as arm moves; redrawn every frame
 
     if headless:
         print("[sim] Headless mode — rendering disabled (saves GPU/CPU heat).")
@@ -337,13 +375,47 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
 
     print(f"[sim] Running {'indefinitely (Ctrl+C to stop)' if steps == 0 else str(steps) + ' steps'}...")
 
+    # Cache UsdGeom import once for EE trail sampling
+    if scan and _draw is not None:
+        from pxr import UsdGeom as _UsdGeom
+        _ee_prim = world.stage.GetPrimAtPath(f"{sc.robot_prim_path}/meca_axis_6_link")
+    else:
+        _UsdGeom = None
+        _ee_prim = None
+
     step_count = 0
     try:
         while steps == 0 or step_count < steps:
             do_render = (not headless) and (step_count % render_interval == 0)
+
+            # Issue debug draw calls BEFORE world.step so they land in this frame
+            # (omni.debugdraw is immediate-mode: queue is flushed during render)
+            if scan and _draw is not None and do_render:
+                for args in _plan_lines:
+                    _draw.draw_line(*args)
+                for args in _trail_lines:
+                    _draw.draw_line(*args)
+
             world.step(render=do_render)
             if controller is not None:
                 controller.step()
+
+            # Every 3 steps: sample EE position and append a trail segment
+            if scan and _draw is not None and step_count % 3 == 0 and _ee_prim is not None:
+                try:
+                    if _ee_prim.IsValid():
+                        t = _UsdGeom.XformCache().GetLocalToWorldTransform(
+                            _ee_prim
+                        ).ExtractTranslation()
+                        cur = _carb.Float3(float(t[0]), float(t[1]), float(t[2]))
+                        if _scan_prev_ee[0] is not None:
+                            _trail_lines.append((
+                                _scan_prev_ee[0], 0xFF00FFFF, 4.0,
+                                cur,              0xFF00FFFF, 4.0,
+                            ))
+                        _scan_prev_ee[0] = cur
+                except Exception:
+                    pass
             # Advance scan waypoints on threshold crossings
             if scan and step_count in scan_step_thresholds:
                 next_idx = scan_step_thresholds.index(step_count) + 1
