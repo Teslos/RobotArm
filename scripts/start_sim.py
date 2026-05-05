@@ -38,11 +38,11 @@ RMPFLOW_DIR    = os.path.join(ASSETS_DIR, "mecademic_description", "rmpflow")
 ROBOT_DESC     = os.path.join(RMPFLOW_DIR, "robot_descriptor.yaml")
 RMPFLOW_CONFIG = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
 
-# Meca500 R3 joint targets (degrees) to position EE ~10 cm above busbar centre.
-# Busbar at (0.15, 0.0, 0.03); top surface z ≈ 0.08 m; approach at z ≈ 0.18 m.
-# Tune with --demo; joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°,
-#   J4 ±170°, J5 ±115°, J6 ±180°.
-DEMO_JOINT_DEG = [0.0, -45.0, 45.0, 0.0, -45.0, 0.0]
+# Meca500 R3 joint targets (degrees) — best approach to busbar centre.
+# Derived from IK grid search (results/workspace.npz): nearest reachable point
+# to busbar centre [0.15, 0.0, 0.18] m → EE at [0.136, 0.036, 0.162] m.
+# Joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°, J4 ±170°, J5 ±115°, J6 ±180°.
+DEMO_JOINT_DEG = [-1.5, 35.0, 18.3, 36.9, 112.4, 12.9]
 
 
 # ── Asset conversion helpers ─────────────────────────────────────────────────
