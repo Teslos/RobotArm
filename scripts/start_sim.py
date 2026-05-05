@@ -44,6 +44,12 @@ RMPFLOW_CONFIG = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
 # Joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°, J4 ±170°, J5 ±115°, J6 ±180°.
 DEMO_JOINT_DEG = [-1.5, 35.0, 18.3, 36.9, 112.4, 12.9]
 
+# Busbar scan parameters
+SCAN_LENGTH_M       = 0.252   # 252 mm scan along the busbar Y axis
+SCAN_HEIGHT_M       = 0.162   # hover height from IK grid search
+SCAN_STEPS_APPROACH = 600     # steps to reach centre hover (10 s at 60 Hz)
+SCAN_STEPS_SWEEP    = 1200    # steps for each sweep leg (20 s at 60 Hz)
+
 
 # ── Asset conversion helpers ─────────────────────────────────────────────────
 
@@ -204,7 +210,7 @@ def _set_viewport_camera() -> None:
 
 
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
-                   headless: bool = False, render_interval: int = 1) -> None:
+                   scan: bool = False, headless: bool = False, render_interval: int = 1) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
@@ -263,6 +269,8 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     print(f"[sim] Busbar position : {sc.busbar_position}")
 
     controller = None
+    scan_waypoints: list = []
+    scan_step_thresholds: list = []
 
     if demo:
         target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
@@ -294,6 +302,34 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         print(f"[rmpflow] EE target: {target.tolist()} m")
         print(f"[rmpflow] Running {steps} steps.")
 
+    elif scan:
+        from exts.robot_arm.controller import RobotArmController
+        controller = RobotArmController(
+            robot=robot,
+            robot_description_path=ROBOT_DESC,
+            rmpflow_config_path=RMPFLOW_CONFIG,
+            urdf_path=URDF_PATH,
+            end_effector_frame_name="meca_axis_6_link",
+            cfg=cfg,
+        )
+        controller.reset()
+        bx, by = sc.busbar_position[0], sc.busbar_position[1]
+        half = SCAN_LENGTH_M / 2.0
+        scan_waypoints = [
+            np.array([bx, by,          SCAN_HEIGHT_M]),  # 1. hover above centre
+            np.array([bx, by - half,   SCAN_HEIGHT_M]),  # 2. sweep start  (-Y)
+            np.array([bx, by + half,   SCAN_HEIGHT_M]),  # 3. sweep end    (+Y)
+        ]
+        scan_waypoint_steps = [SCAN_STEPS_APPROACH, SCAN_STEPS_SWEEP, SCAN_STEPS_SWEEP]
+        scan_wp_idx = [0]  # mutable so inner loop can update it
+        scan_step_thresholds = [sum(scan_waypoint_steps[:i+1]) for i in range(len(scan_waypoint_steps))]
+        controller.set_end_effector_target(scan_waypoints[0])
+        steps = sum(scan_waypoint_steps)
+        print(f"[scan] Busbar scan: {SCAN_LENGTH_M*1000:.0f} mm along Y axis at Z={SCAN_HEIGHT_M:.3f} m")
+        for i, wp in enumerate(scan_waypoints):
+            print(f"[scan]   WP{i}: {wp.tolist()}  ({scan_waypoint_steps[i]} steps)")
+        print(f"[scan] Total: {steps} steps ({steps/60:.0f} s)")
+
     if headless:
         print("[sim] Headless mode — rendering disabled (saves GPU/CPU heat).")
     elif render_interval > 1:
@@ -308,6 +344,13 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
             world.step(render=do_render)
             if controller is not None:
                 controller.step()
+            # Advance scan waypoints on threshold crossings
+            if scan and step_count in scan_step_thresholds:
+                next_idx = scan_step_thresholds.index(step_count) + 1
+                if next_idx < len(scan_waypoints):
+                    scan_wp_idx[0] = next_idx
+                    controller.set_end_effector_target(scan_waypoints[next_idx])
+                    print(f"[scan] → WP{next_idx}: {scan_waypoints[next_idx].tolist()}")
             step_count += 1
     except KeyboardInterrupt:
         print(f"\n[sim] Stopped after {step_count} steps.")
@@ -341,6 +384,8 @@ def main() -> None:
                       help="Move arm above busbar centre using direct joint targets")
     mode.add_argument("--rmpflow", action="store_true",
                       help="Move arm above busbar centre using RMPFlow (needs LULA config files)")
+    mode.add_argument("--scan", action="store_true",
+                      help=f"Approach busbar then sweep {SCAN_LENGTH_M*1000:.0f} mm along Y axis")
     args = parser.parse_args()
 
     # SimulationApp must be created before any omni.* imports
@@ -363,7 +408,7 @@ def main() -> None:
         print(f"[asset] Busbar USD found: {BUSBAR_USD}")
 
     _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow,
-                   headless=args.headless, render_interval=args.render_interval)
+                   scan=args.scan, headless=args.headless, render_interval=args.render_interval)
 
     app.close()
 
