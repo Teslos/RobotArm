@@ -18,14 +18,41 @@ exts/robot_arm/     # Main package (Isaac Sim extension)
   config.py         # Typed dataclasses for all physics/control parameters
   world.py          # build_world(): TGS solver, Z-up, collision groups
   articulation.py   # configure_articulation(): drives, limits, CCD, offsets
+                    #   PD gains via USD DriveAPI (Isaac Sim 4.5 compatible)
   sensors.py        # LaggedSensor / LaggedCamera / LaggedLidar
   safeguards.py     # SafeguardManager: teleport guard + drift re-centering
   controller.py     # RobotArmController: RMPFlow + stall monitor
   robots/meca500.py # load_meca500(): USD reference + articulation setup
   tasks/workspace_mapper.py  # WorkspaceMapper: IK grid search for reachability
+                              #   WorkspaceMap: load/save/query results (.npz)
+assets/mecademic_description/
+  urdf/meca500r3.urdf         # Robot URDF
+  meshes/                     # .dae visual + .stl collision meshes
+  rmpflow/
+    robot_descriptor.yaml     # LULA kinematic chain + collision spheres
+    rmpflow_config.yaml       # RMPFlow tuning params + base geometry
+scripts/
+  start_sim.py      # Main sim launcher (--demo, --rmpflow, --headless flags)
+  map_workspace.py  # IK grid search over busbar region → results/workspace.npz
+results/
+  workspace.npz     # Last grid search: 202/320 reachable (63.1%), 8×8×5 grid
 config/robot_arm.yaml   # YAML mirror of default config values
 docs/specs.md           # Full design specification
 tests/                  # Unit tests (no Isaac Sim required -- omni/pxr stubbed)
+```
+
+## Running scripts
+```bash
+# Interactive GUI simulation (demo movement)
+micromamba run -n RobotArm python scripts/start_sim.py --demo
+
+# Headless simulation with RMPFlow
+micromamba run -n RobotArm python scripts/start_sim.py --headless --rmpflow --steps 200
+
+# IK workspace grid search (saves to results/workspace.npz)
+micromamba run -n RobotArm python scripts/map_workspace.py
+micromamba run -n RobotArm python scripts/map_workspace.py --nx 10 --ny 10 --nz 6
+micromamba run -n RobotArm python scripts/map_workspace.py --output results/my_search.npz
 ```
 
 ## Key design decisions (from docs/specs.md)
@@ -44,6 +71,13 @@ tests/                  # Unit tests (no Isaac Sim required -- omni/pxr stubbed)
 | Teleport guard | `safe_teleport()` called | Zeros all velocities + efforts |
 | Drift re-centering | Every 10,000 steps, drift > 0.1 mm | Silently snaps base to origin |
 | Stall monitor | Velocity < threshold for > 5 s | Cancels RMPFlow goal |
+
+## Isaac Sim 4.5 API notes
+- `SingleArticulation` has no `set_gains()` — set PD gains via `UsdPhysics.DriveAPI.CreateStiffnessAttr/DampingAttr` directly on joint prims
+- `PhysxJointAPI` has no `CreateDampingAttr` — use only `CreateJointFrictionAttr`
+- `LulaKinematicsSolver.compute_inverse_kinematics(frame_name, target_position, ...)` — `frame_name` is now a required first positional arg (e.g. `"meca_axis_6_link"`)
+- `compute_inverse_kinematics` returns `(np.ndarray, bool)` not `(ArticulationAction, bool)`
+- Use `get_cspace_position_limits()` to get n_dof from the solver
 
 ## Physics parameters (defaults)
 | Parameter | Value |
