@@ -11,8 +11,8 @@ Usage:
     micromamba run -n RobotArm python scripts/map_workspace.py --nx 10 --ny 10 --nz 6
 
 Prerequisites:
-    assets/mecharm_270/rmpflow/robot_descriptor.yaml  (LULA robot description)
-    assets/mecharm_270/mecharm_270.urdf
+    assets/mecademic_description/rmpflow/robot_descriptor.yaml
+    assets/mecademic_description/urdf/meca500r3.urdf
 """
 from __future__ import annotations
 
@@ -82,7 +82,7 @@ def main() -> None:
     print(f"[workspace] X {cfg.x_range}, Y {cfg.y_range}, Z {cfg.z_range}")
 
     solver = _build_solver()
-    mapper = WorkspaceMapper(ik_solver=solver)
+    mapper = WorkspaceMapper(ik_solver=solver, ee_frame="meca_axis_6_link")
     wmap = mapper.run(cfg)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)

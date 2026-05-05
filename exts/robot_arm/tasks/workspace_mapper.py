@@ -81,10 +81,12 @@ class WorkspaceMapper:
     def __init__(
         self,
         ik_solver: Any,
+        ee_frame: str = "end_effector",
         lower_limits: Optional[np.ndarray] = None,
         upper_limits: Optional[np.ndarray] = None,
     ) -> None:
         self._solver = ik_solver
+        self._ee_frame = ee_frame
         self._lower = lower_limits
         self._upper = upper_limits
 
@@ -143,8 +145,10 @@ class WorkspaceMapper:
                 action, ok = self._call_ik(position, ori_arr, warm)
             except Exception:
                 continue
-            if ok and self._limits_ok(action.joint_positions):
-                return np.asarray(action.joint_positions, dtype=float)
+            # Isaac Sim 4.5 returns np.ndarray; older API returns ArticulationAction
+            jpos = action if isinstance(action, np.ndarray) else np.asarray(action.joint_positions, dtype=float)
+            if ok and self._limits_ok(jpos):
+                return jpos
         return None
 
     def _call_ik(
@@ -153,18 +157,22 @@ class WorkspaceMapper:
         orientation: Optional[np.ndarray],
         warm: Optional[np.ndarray],
     ):
-        """Call solver with optional warm-start, falling back if unsupported."""
+        """Call solver with optional frame_name (Isaac Sim 4.5+) and warm-start."""
         kwargs: dict = {"target_position": position}
         if orientation is not None:
             kwargs["target_orientation"] = orientation
         if warm is not None:
             try:
                 return self._solver.compute_inverse_kinematics(
-                    **kwargs, warm_start_position=warm
+                    self._ee_frame, **kwargs, warm_start_position=warm
                 )
             except TypeError:
-                pass  # solver doesn't accept warm_start_position
-        return self._solver.compute_inverse_kinematics(**kwargs)
+                pass  # solver doesn't accept frame_name or warm_start_position
+        try:
+            return self._solver.compute_inverse_kinematics(self._ee_frame, **kwargs)
+        except TypeError:
+            # older API without frame_name
+            return self._solver.compute_inverse_kinematics(**kwargs)
 
     def _limits_ok(self, jpos: np.ndarray) -> bool:
         if self._lower is not None and np.any(jpos < self._lower):
@@ -174,17 +182,30 @@ class WorkspaceMapper:
         return True
 
     def _get_n_dof(self) -> int:
-        for attr in ("num_dofs", "num_dof"):
+        for attr in ("num_dofs", "num_dof", "num_cspace_coords"):
             if hasattr(self._solver, attr):
                 return int(getattr(self._solver, attr))
-        # probe via a dummy call
-        try:
-            action, _ = self._solver.compute_inverse_kinematics(
-                target_position=np.array([0.2, 0.0, 0.2])
-            )
-            return len(action.joint_positions)
-        except Exception:
-            raise RuntimeError("Cannot determine n_dof from IK solver.")
+        # get_cspace_position_limits returns (lower, upper) arrays of length n_dof
+        if hasattr(self._solver, "get_cspace_position_limits"):
+            try:
+                lower, _ = self._solver.get_cspace_position_limits()
+                return len(lower)
+            except Exception:
+                pass
+        # probe via a dummy IK call — try new API (frame_name) then old API
+        for args in [(self._ee_frame,), ()]:
+            try:
+                action, _ = self._solver.compute_inverse_kinematics(
+                    *args, target_position=np.array([0.2, 0.0, 0.2])
+                )
+                jpos = action if isinstance(action, np.ndarray) else action.joint_positions
+                return len(jpos)
+            except TypeError:
+                continue
+            except Exception as exc:
+                print(f"[workspace] n_dof probe failed (args={args}): {exc}")
+                continue
+        raise RuntimeError("Cannot determine n_dof from IK solver.")
 
 
 # ------------------------------------------------------------------
