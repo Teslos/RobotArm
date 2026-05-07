@@ -296,8 +296,9 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     _scan_prev_ee = [None]           # last EE Float3 for trail drawing
     _plan_lines: list = []           # static planned-path draw calls (redrawn each frame)
     _trail_lines: list = []          # growing EE trail draw calls
-    _scan_jnt_traj: np.ndarray = np.empty((0, 6))  # (N, n_dof) IK trajectory
-    _scan_start_joints: np.ndarray  = np.zeros(6)   # rest pose at scan start
+    _scan_jnt_traj: np.ndarray     = np.empty((0, 6))  # (N, n_dof) scan IK trajectory
+    _approach_jnt_traj: np.ndarray = np.empty((0, 6))  # Cartesian approach IK waypoints
+    _scan_start_joints: np.ndarray = np.zeros(6)        # rest pose at scan start
 
     if demo:
         target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
@@ -350,17 +351,21 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         _scan_start_joints = robot.get_joint_positions().copy()
 
         _ee_prim_fk = world.stage.GetPrimAtPath(f"{sc.robot_prim_path}/meca_axis_6_link")
-        xform_fk = UsdGeom.XformCache().GetLocalToWorldTransform(_ee_prim_fk)
-        rot_fk   = xform_fk.ExtractRotation()      # Gf.Rotation
-        quat_fk  = rot_fk.GetQuat()                 # Gf.Quaternion
-        # LULA expects [w, x, y, z]
+        xform_fk  = UsdGeom.XformCache().GetLocalToWorldTransform(_ee_prim_fk)
+        rot_fk    = xform_fk.ExtractRotation()
+        quat_fk   = rot_fk.GetQuat()
+        trans_fk  = xform_fk.ExtractTranslation()
+        # EE Cartesian position at the settled approach pose
+        ee_at_demo = np.array([float(trans_fk[0]), float(trans_fk[1]), float(trans_fk[2])])
+        # LULA orientation constraint — [w, x, y, z]
         approach_ori = np.array([
             quat_fk.real,
             quat_fk.imaginary[0],
             quat_fk.imaginary[1],
             quat_fk.imaginary[2],
         ])
-        print(f"[scan] Approach EE orientation (wxyz): {np.round(approach_ori, 3).tolist()}")
+        print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
+              f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
         # ── Plan IK trajectory with orientation constraint ─────────────────
         # Use the reachable X from the IK grid search (0.136 m), NOT the busbar
@@ -453,6 +458,54 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
               f"J2: {np.degrees(_scan_jnt_traj[0, 1]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 1]):.1f}°  "
               f"J4: {np.degrees(_scan_jnt_traj[0, 3]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 3]):.1f}°")
 
+        # ── Cartesian approach trajectory ──────────────────────────────────────
+        # Compute IK at N_APPROACH evenly-spaced points along the straight line
+        # from ee_at_demo (arm at DEMO config) to scan_ee_targets[0] (scan start).
+        # This keeps the EE on a straight Cartesian path during approach instead
+        # of the arc produced by direct joint-space interpolation.
+        N_APPROACH = 20
+        app_pts = np.array([
+            (1.0 - s) * ee_at_demo + s * scan_ee_targets[0]
+            for s in np.linspace(0.0, 1.0, N_APPROACH)
+        ])
+        a_warm = _scan_start_joints.copy()
+        _app_list = []
+        n_app_ok = 0
+        for pt in app_pts:
+            jpos_a, ok_a = _ik_with_ori(pt, approach_ori)
+            if ok_a:
+                a_warm = jpos_a
+                n_app_ok += 1
+            else:
+                jpos_a = a_warm.copy()
+            _app_list.append(jpos_a.copy())
+        _approach_jnt_traj = np.array(_app_list)
+
+        # Apply same branch-jump smoothing to approach trajectory
+        i_a = 1
+        while i_a < N_APPROACH:
+            diff_a = np.abs(_approach_jnt_traj[i_a] - _approach_jnt_traj[i_a - 1])
+            if np.any(diff_a > JUMP_THRESH):
+                j_a = i_a + 1
+                ref_ja = _approach_jnt_traj[i_a - 1]
+                while j_a < N_APPROACH and np.any(
+                        np.abs(_approach_jnt_traj[j_a] - ref_ja) > np.radians(90)):
+                    j_a += 1
+                j_end_a = min(j_a, N_APPROACH - 1)
+                span_a = j_end_a - (i_a - 1)
+                if span_a > 1:
+                    jA_a = _approach_jnt_traj[i_a - 1]
+                    jB_a = _approach_jnt_traj[j_end_a]
+                    for k_a in range(1, span_a):
+                        _approach_jnt_traj[i_a - 1 + k_a] = (
+                            (1.0 - k_a / span_a) * jA_a + (k_a / span_a) * jB_a
+                        )
+                i_a = j_end_a + 1
+            else:
+                i_a += 1
+        print(f"[scan] Approach traj: {n_app_ok}/{N_APPROACH} IK solved  "
+              f"({np.degrees(np.abs(_approach_jnt_traj[-1]-_approach_jnt_traj[0]).max()):.1f}° max span)")
+
         steps = SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP
         print(f"[scan] Approach {SCAN_STEPS_APPROACH} steps + Sweep {SCAN_STEPS_SWEEP} steps "
               f"= {steps} steps ({steps/60:.0f} s)")
@@ -525,21 +578,33 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
                         _scan_prev_ee[0] = cur
                 except Exception:
                     pass
-            # Joint trajectory interpolation for scan mode
+            # Joint trajectory interpolation with S-curve motion profiling
             if scan and len(_scan_jnt_traj) > 0:
-                if step_count < SCAN_STEPS_APPROACH:
+                if step_count < SCAN_STEPS_APPROACH and len(_approach_jnt_traj) > 1:
                     t = float(step_count) / max(SCAN_STEPS_APPROACH, 1)
-                    tgt_joints = (1.0 - t) * _scan_start_joints + t * _scan_jnt_traj[0]
+                    ts = 3.0 * t * t - 2.0 * t * t * t          # cubic ease-in/out
+                    idx_f = ts * (len(_approach_jnt_traj) - 1)
+                    lo = int(idx_f)
+                    hi = min(lo + 1, len(_approach_jnt_traj) - 1)
+                    alpha = idx_f - lo
+                    tgt_joints = (
+                        (1.0 - alpha) * _approach_jnt_traj[lo]
+                        + alpha       * _approach_jnt_traj[hi]
+                    )
                 else:
                     sweep_t = min(
                         float(step_count - SCAN_STEPS_APPROACH) / max(SCAN_STEPS_SWEEP, 1),
                         1.0,
                     )
-                    idx_f = sweep_t * (len(_scan_jnt_traj) - 1)
+                    sweep_ts = 3.0 * sweep_t * sweep_t - 2.0 * sweep_t * sweep_t * sweep_t
+                    idx_f = sweep_ts * (len(_scan_jnt_traj) - 1)
                     lo = int(idx_f)
                     hi = min(lo + 1, len(_scan_jnt_traj) - 1)
                     alpha = idx_f - lo
-                    tgt_joints = (1.0 - alpha) * _scan_jnt_traj[lo] + alpha * _scan_jnt_traj[hi]
+                    tgt_joints = (
+                        (1.0 - alpha) * _scan_jnt_traj[lo]
+                        + alpha       * _scan_jnt_traj[hi]
+                    )
                 set_joint_position_targets(robot, tgt_joints.tolist())
                 # Log progress + actual EE position every ~5 s
                 if step_count % 300 == 0:
