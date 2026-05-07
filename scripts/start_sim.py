@@ -198,11 +198,12 @@ def _acquire_draw():
         return None, None
 
 
-def _set_viewport_camera() -> None:
-    """Point the default viewport at the arm + busbar from a 45-degree isometric angle.
+def _set_viewport_camera(scan: bool = False) -> None:
+    """Point the default viewport camera.
 
-    Eye at (0.55, -0.45, 0.45) looks toward the workspace centre (0.1, 0.0, 0.12),
-    giving a clear view of the full arm and the busbar on the table.
+    Default (iso): eye=(0.55, -0.45, 0.45) → workspace centre.
+    Scan mode:     eye=(0.50,  0.00, 0.35) → busbar scan line, looking along +X
+                   so the Y sweep appears as left-right motion in the viewport.
     """
     try:
         from isaacsim.core.utils.viewports import set_camera_view
@@ -210,13 +211,22 @@ def _set_viewport_camera() -> None:
         try:
             from omni.isaac.core.utils.viewports import set_camera_view  # type: ignore[no-redef]
         except ImportError:
-            return  # viewport API not available — skip silently
+            return
     import numpy as np
-    set_camera_view(
-        eye=np.array([0.55, -0.45, 0.45]),
-        target=np.array([0.10, 0.00, 0.12]),
-        camera_prim_path="/OmniverseKit_Persp",
-    )
+    if scan:
+        # Side view: camera at positive X, looking toward the scan line.
+        # Y motion appears left-right; Z height clearly visible.
+        set_camera_view(
+            eye=np.array([0.50, 0.00, 0.35]),
+            target=np.array([0.15, 0.00, 0.16]),
+            camera_prim_path="/OmniverseKit_Persp",
+        )
+    else:
+        set_camera_view(
+            eye=np.array([0.55, -0.45, 0.45]),
+            target=np.array([0.10, 0.00, 0.12]),
+            camera_prim_path="/OmniverseKit_Persp",
+        )
 
 
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
@@ -270,7 +280,7 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     world.reset()
 
     if not headless:
-        _set_viewport_camera()
+        _set_viewport_camera(scan=scan)
 
     configure_articulation(robot, cfg, ccd_link_names=tuple(sc.ccd_link_names))
 
@@ -279,13 +289,15 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     print(f"[sim] Busbar position : {sc.busbar_position}")
 
     controller = None
-    scan_waypoints: list = []
+    scan_waypoints: list = []       # unused in IK-planned scan, kept for compat
     scan_step_thresholds: list = []
     _draw = None
     _carb = None
-    _scan_prev_ee = [None]  # last EE Float3 for trail drawing
-    _plan_lines: list = []  # static planned-path draw calls
-    _trail_lines: list = []  # growing EE trail draw calls
+    _scan_prev_ee = [None]           # last EE Float3 for trail drawing
+    _plan_lines: list = []           # static planned-path draw calls (redrawn each frame)
+    _trail_lines: list = []          # growing EE trail draw calls
+    _scan_jnt_traj: np.ndarray = np.empty((0, 6))  # (N, n_dof) IK trajectory
+    _scan_start_joints: np.ndarray  = np.zeros(6)   # rest pose at scan start
 
     if demo:
         target_rad = list(np.deg2rad(DEMO_JOINT_DEG))
@@ -318,55 +330,152 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         print(f"[rmpflow] Running {steps} steps.")
 
     elif scan:
-        from exts.robot_arm.controller import RobotArmController
-        controller = RobotArmController(
-            robot=robot,
+        # ── Initialise LULA IK solver ──────────────────────────────────────
+        try:
+            from isaacsim.robot_motion.motion_generation import LulaKinematicsSolver
+        except ImportError:
+            from omni.isaac.motion_generation.lula import LulaKinematicsSolver  # type: ignore
+        _lk = LulaKinematicsSolver(
             robot_description_path=ROBOT_DESC,
-            rmpflow_config_path=RMPFLOW_CONFIG,
             urdf_path=URDF_PATH,
-            end_effector_frame_name="meca_axis_6_link",
-            cfg=cfg,
         )
-        controller.reset()
-        bx, by = sc.busbar_position[0], sc.busbar_position[1]
-        half = SCAN_LENGTH_M / 2.0
-        scan_waypoints = [
-            np.array([bx, by,          SCAN_HEIGHT_M]),  # 1. hover above centre
-            np.array([bx, by - half,   SCAN_HEIGHT_M]),  # 2. sweep start  (-Y)
-            np.array([bx, by + half,   SCAN_HEIGHT_M]),  # 3. sweep end    (+Y)
-        ]
-        scan_waypoint_steps = [SCAN_STEPS_APPROACH, SCAN_STEPS_SWEEP, SCAN_STEPS_SWEEP]
-        scan_wp_idx = [0]  # mutable so inner loop can update it
-        scan_step_thresholds = [sum(scan_waypoint_steps[:i+1]) for i in range(len(scan_waypoint_steps))]
-        controller.set_end_effector_target(scan_waypoints[0])
-        steps = sum(scan_waypoint_steps)
-        print(f"[scan] Busbar scan: {SCAN_LENGTH_M*1000:.0f} mm along Y axis at Z={SCAN_HEIGHT_M:.3f} m")
-        for i, wp in enumerate(scan_waypoints):
-            print(f"[scan]   WP{i}: {wp.tolist()}  ({scan_waypoint_steps[i]} steps)")
-        print(f"[scan] Total: {steps} steps ({steps/60:.0f} s)")
-        # ── debug visualisation ───────────────────────────────────────────
-        # omni.debugdraw is IMMEDIATE MODE: lines are cleared after every
-        # render frame, so they must be redrawn on each world.step(render=True).
+
+        # ── Pre-settle to approach pose; read EE orientation for IK constraint ──
+        # Settling first means _scan_start_joints is already at the approach config,
+        # and the orientation quaternion locks the wrist during IK planning so
+        # the solver stays on the same branch for all 40 scan waypoints.
+        set_joint_position_targets(robot, list(np.deg2rad(DEMO_JOINT_DEG)))
+        for _ in range(120):        # 2 s of physics to settle
+            world.step(render=False)
+        _scan_start_joints = robot.get_joint_positions().copy()
+
+        _ee_prim_fk = world.stage.GetPrimAtPath(f"{sc.robot_prim_path}/meca_axis_6_link")
+        xform_fk = UsdGeom.XformCache().GetLocalToWorldTransform(_ee_prim_fk)
+        rot_fk   = xform_fk.ExtractRotation()      # Gf.Rotation
+        quat_fk  = rot_fk.GetQuat()                 # Gf.Quaternion
+        # LULA expects [w, x, y, z]
+        approach_ori = np.array([
+            quat_fk.real,
+            quat_fk.imaginary[0],
+            quat_fk.imaginary[1],
+            quat_fk.imaginary[2],
+        ])
+        print(f"[scan] Approach EE orientation (wxyz): {np.round(approach_ori, 3).tolist()}")
+
+        # ── Plan IK trajectory with orientation constraint ─────────────────
+        # Use the reachable X from the IK grid search (0.136 m), NOT the busbar
+        # geometric centre (0.15 m) which is outside the arm's reachable workspace.
+        SCAN_X_M = 0.136
+        by   = sc.busbar_position[1]   # 0.0 m
+        half = SCAN_LENGTH_M / 2.0     # 0.126 m
+
+        N_SCAN   = 40
+        y_values = np.linspace(by - half, by + half, N_SCAN)
+        warm     = _scan_start_joints.copy()   # seed for fallback
+
+        print(f"[scan] Planning {N_SCAN}-point IK trajectory  "
+              f"X={SCAN_X_M:.3f} m  Y={((by-half)*1000):.0f}→{((by+half)*1000):.0f} mm  "
+              f"Z={SCAN_HEIGHT_M:.3f} m …")
+        _scan_jnt_list = []
+        scan_ee_targets = []
+        n_ok = 0
+
+        def _ik_with_ori(tgt, ori):
+            """Try IK with orientation constraint; fall back to position-only."""
+            for kwargs, frame in [
+                ({"target_position": tgt, "target_orientation": ori}, "meca_axis_6_link"),
+                ({"target_position": tgt, "target_orientation": ori}, None),
+                ({"target_position": tgt},                            "meca_axis_6_link"),
+                ({"target_position": tgt},                            None),
+            ]:
+                try:
+                    if frame:
+                        res, _ok = _lk.compute_inverse_kinematics(frame, **kwargs)
+                    else:
+                        res, _ok = _lk.compute_inverse_kinematics(**kwargs)
+                    jpos = res if isinstance(res, np.ndarray) else np.asarray(res.joint_positions)
+                    if bool(_ok):
+                        return jpos, True
+                except TypeError:
+                    continue
+            return None, False
+
+        for y in y_values:
+            tgt = np.array([SCAN_X_M, y, SCAN_HEIGHT_M])
+            jpos, ok = _ik_with_ori(tgt, approach_ori)
+            if ok:
+                warm = jpos
+                n_ok += 1
+            else:
+                jpos = warm.copy()
+            _scan_jnt_list.append(jpos.copy())
+            scan_ee_targets.append(tgt)
+
+        _scan_jnt_traj = np.array(_scan_jnt_list)   # (N_SCAN, n_dof)
+        scan_ee_targets = np.array(scan_ee_targets)  # (N_SCAN, 3)
+
+        # ── Post-process: smooth over large inter-waypoint joint jumps ────────
+        # Without IK warm-starting the solver can land on different branches for
+        # adjacent points.  Detect any step > 55° and linearly interpolate in
+        # joint space over the entire "wrong-branch" region.
+        JUMP_THRESH = np.radians(55)
+        i = 1
+        n_smoothed_pts = 0
+        while i < N_SCAN:
+            diff = np.abs(_scan_jnt_traj[i] - _scan_jnt_traj[i - 1])
+            if np.any(diff > JUMP_THRESH):
+                # Find the next point within 90° of traj[i-1] in every joint
+                j = i + 1
+                ref_j = _scan_jnt_traj[i - 1]
+                while j < N_SCAN and np.any(
+                        np.abs(_scan_jnt_traj[j] - ref_j) > np.radians(90)):
+                    j += 1
+                j_end = min(j, N_SCAN - 1)
+                jA = _scan_jnt_traj[i - 1]
+                jB = _scan_jnt_traj[j_end]
+                span = j_end - (i - 1)
+                if span > 1:
+                    for k in range(1, span):
+                        alpha = k / span
+                        _scan_jnt_traj[i - 1 + k] = (1.0 - alpha) * jA + alpha * jB
+                    n_smoothed_pts += span - 1
+                i = j_end + 1
+            else:
+                i += 1
+
+        # Validate trajectory continuity
+        j_range_deg = np.degrees(_scan_jnt_traj.max(axis=0) - _scan_jnt_traj.min(axis=0))
+        print(f"[scan] IK: {n_ok}/{N_SCAN} solved  "
+              f"smoothed: {n_smoothed_pts} pts  "
+              f"joint range (deg): {np.round(j_range_deg, 1).tolist()}")
+        print(f"[scan] J1 start→end: "
+              f"{np.degrees(_scan_jnt_traj[0, 0]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 0]):.1f}°  "
+              f"J2: {np.degrees(_scan_jnt_traj[0, 1]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 1]):.1f}°  "
+              f"J4: {np.degrees(_scan_jnt_traj[0, 3]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 3]):.1f}°")
+
+        steps = SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP
+        print(f"[scan] Approach {SCAN_STEPS_APPROACH} steps + Sweep {SCAN_STEPS_SWEEP} steps "
+              f"= {steps} steps ({steps/60:.0f} s)")
+
+        # ── debug visualisation (immediate-mode: redrawn every render frame) ──
         _draw, _carb = _acquire_draw()
-        # Pre-build static line list for the planned path (orange)
-        _plan_lines: list = []  # each entry: (p0, col, w, p1, col, w)
         if _draw is not None:
-            for i in range(len(scan_waypoints) - 1):
-                p0 = _carb.Float3(*scan_waypoints[i].tolist())
-                p1 = _carb.Float3(*scan_waypoints[i + 1].tolist())
-                _plan_lines.append((p0, 0xFFFF8800, 6.0, p1, 0xFFFF8800, 6.0))
-            r = 0.008  # cross-hair arm length (m)
-            for wp in scan_waypoints:
+            # Orange line through actual IK target positions
+            for i in range(len(scan_ee_targets) - 1):
+                p0 = _carb.Float3(*scan_ee_targets[i].tolist())
+                p1 = _carb.Float3(*scan_ee_targets[i + 1].tolist())
+                _plan_lines.append((p0, 0xFFFF8800, 5.0, p1, 0xFFFF8800, 5.0))
+            r = 0.008
+            for wp in [scan_ee_targets[0], scan_ee_targets[N_SCAN // 2], scan_ee_targets[-1]]:
                 x, y, z = wp.tolist()
-                for dx, dy, dz in [(r,0,0),(0,r,0),(0,0,r)]:
+                for dx, dy, dz in [(r, 0, 0), (0, r, 0), (0, 0, r)]:
                     _plan_lines.append((
                         _carb.Float3(x-dx, y-dy, z-dz), 0xFFFF8800, 4.0,
                         _carb.Float3(x+dx, y+dy, z+dz), 0xFFFF8800, 4.0,
                     ))
-            print("[scan] Debug draw ready — orange plan + cyan trail will render each frame.")
+            print("[scan] Debug draw ready — orange plan + cyan EE trail.")
         else:
-            print("[scan] omni.debugdraw not available — viewport lines disabled.")
-        _trail_lines: list = []    # grows as arm moves; redrawn every frame
+            print("[scan] omni.debugdraw not available.")
 
     if headless:
         print("[sim] Headless mode — rendering disabled (saves GPU/CPU heat).")
@@ -404,25 +513,49 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
             if scan and _draw is not None and step_count % 3 == 0 and _ee_prim is not None:
                 try:
                     if _ee_prim.IsValid():
-                        t = _UsdGeom.XformCache().GetLocalToWorldTransform(
+                        xf = _UsdGeom.XformCache().GetLocalToWorldTransform(
                             _ee_prim
                         ).ExtractTranslation()
-                        cur = _carb.Float3(float(t[0]), float(t[1]), float(t[2]))
+                        cur = _carb.Float3(float(xf[0]), float(xf[1]), float(xf[2]))
                         if _scan_prev_ee[0] is not None:
                             _trail_lines.append((
-                                _scan_prev_ee[0], 0xFF00FFFF, 4.0,
-                                cur,              0xFF00FFFF, 4.0,
+                                _scan_prev_ee[0], 0xFF00FFFF, 8.0,
+                                cur,              0xFF00FFFF, 8.0,
                             ))
                         _scan_prev_ee[0] = cur
                 except Exception:
                     pass
-            # Advance scan waypoints on threshold crossings
-            if scan and step_count in scan_step_thresholds:
-                next_idx = scan_step_thresholds.index(step_count) + 1
-                if next_idx < len(scan_waypoints):
-                    scan_wp_idx[0] = next_idx
-                    controller.set_end_effector_target(scan_waypoints[next_idx])
-                    print(f"[scan] → WP{next_idx}: {scan_waypoints[next_idx].tolist()}")
+            # Joint trajectory interpolation for scan mode
+            if scan and len(_scan_jnt_traj) > 0:
+                if step_count < SCAN_STEPS_APPROACH:
+                    t = float(step_count) / max(SCAN_STEPS_APPROACH, 1)
+                    tgt_joints = (1.0 - t) * _scan_start_joints + t * _scan_jnt_traj[0]
+                else:
+                    sweep_t = min(
+                        float(step_count - SCAN_STEPS_APPROACH) / max(SCAN_STEPS_SWEEP, 1),
+                        1.0,
+                    )
+                    idx_f = sweep_t * (len(_scan_jnt_traj) - 1)
+                    lo = int(idx_f)
+                    hi = min(lo + 1, len(_scan_jnt_traj) - 1)
+                    alpha = idx_f - lo
+                    tgt_joints = (1.0 - alpha) * _scan_jnt_traj[lo] + alpha * _scan_jnt_traj[hi]
+                set_joint_position_targets(robot, tgt_joints.tolist())
+                # Log progress + actual EE position every ~5 s
+                if step_count % 300 == 0:
+                    phase = "approach" if step_count < SCAN_STEPS_APPROACH else "sweep"
+                    pct = (min(step_count, SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP)
+                           / (SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP) * 100)
+                    ee_str = ""
+                    if _ee_prim is not None:
+                        try:
+                            xf2 = _UsdGeom.XformCache().GetLocalToWorldTransform(
+                                _ee_prim
+                            ).ExtractTranslation()
+                            ee_str = (f"  EE=({xf2[0]:.3f}, {xf2[1]:.3f}, {xf2[2]:.3f})")
+                        except Exception:
+                            pass
+                    print(f"[scan] step {step_count}  phase={phase}  {pct:.0f}%{ee_str}")
             step_count += 1
     except KeyboardInterrupt:
         print(f"\n[sim] Stopped after {step_count} steps.")
