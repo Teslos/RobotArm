@@ -164,10 +164,10 @@ class WorkspaceMapper:
         if warm is not None:
             try:
                 return self._solver.compute_inverse_kinematics(
-                    self._ee_frame, **kwargs, warm_start_position=warm
+                    self._ee_frame, **kwargs, warm_start=warm
                 )
             except TypeError:
-                pass  # solver doesn't accept frame_name or warm_start_position
+                pass  # solver doesn't accept frame_name or warm_start
         try:
             return self._solver.compute_inverse_kinematics(self._ee_frame, **kwargs)
         except TypeError:

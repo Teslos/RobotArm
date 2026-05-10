@@ -1,6 +1,12 @@
 # RobotArm — Isaac Sim Project
 
 ## Environment
+- **OS: Windows 11** — use PowerShell syntax, NOT Linux/bash utilities
+  - Delete files: `Remove-Item path` (not `rm` or `del`)
+  - File exists check: `Test-Path path`
+  - Multi-line Python: write a `.py` script file, do NOT use `python -c "..."` with multi-line strings
+  - Grep equivalent: use the `Grep` tool, not `grep` or `rg` bash commands
+  - Shell: PowerShell (`pwsh`) — use `$env:VAR`, backtick for line continuation, `&&` works
 - Python manager: **micromamba**, env: **RobotArm**
 - Run commands: `micromamba run -n RobotArm python ...`
 - Run tests: `micromamba run -n RobotArm python -m pytest tests/ --tb=short -q`

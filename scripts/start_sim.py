@@ -36,7 +36,8 @@ BUSBAR_USD = os.path.join(ASSETS_DIR, "busbar", "busbar.usd")
 MESH_DIR       = os.path.join(ASSETS_DIR, "mecademic_description", "meshes")
 RMPFLOW_DIR    = os.path.join(ASSETS_DIR, "mecademic_description", "rmpflow")
 ROBOT_DESC     = os.path.join(RMPFLOW_DIR, "robot_descriptor.yaml")
-RMPFLOW_CONFIG = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
+RMPFLOW_CONFIG       = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
+SCAN_WORKSPACE_NPZ   = os.path.join(REPO_ROOT, "results", "scan_workspace.npz")
 
 # Meca500 R3 joint targets (degrees) — best approach to busbar centre.
 # Derived from IK grid search (results/workspace.npz): nearest reachable point
@@ -367,112 +368,53 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
               f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
-        # ── Plan IK trajectory with orientation constraint ─────────────────
-        # Use the reachable X from the IK grid search (0.136 m), NOT the busbar
-        # geometric centre (0.15 m) which is outside the arm's reachable workspace.
+        # ── Scan trajectory: precomputed grid → online IK fallback ───────────
         SCAN_X_M = 0.136
         by   = sc.busbar_position[1]   # 0.0 m
         half = SCAN_LENGTH_M / 2.0     # 0.126 m
 
-        N_SCAN   = 40
-        y_values = np.linspace(by - half, by + half, N_SCAN)
-        warm     = _scan_start_joints.copy()   # seed for fallback
-
-        print(f"[scan] Planning {N_SCAN}-point IK trajectory  "
-              f"X={SCAN_X_M:.3f} m  Y={((by-half)*1000):.0f}→{((by+half)*1000):.0f} mm  "
-              f"Z={SCAN_HEIGHT_M:.3f} m …")
-        _scan_jnt_list = []
-        scan_ee_targets = []
-        n_ok = 0
-
-        def _ik_with_ori(tgt, ori):
-            """Try IK with orientation constraint; fall back to position-only."""
-            for kwargs, frame in [
-                ({"target_position": tgt, "target_orientation": ori}, "meca_axis_6_link"),
-                ({"target_position": tgt, "target_orientation": ori}, None),
-                ({"target_position": tgt},                            "meca_axis_6_link"),
-                ({"target_position": tgt},                            None),
-            ]:
+        def _ik_with_ori(tgt, ori, warm=None):
+            """IK with orientation constraint, warm_start, and position-only fallback."""
+            for try_ori in [True, False]:
+                kwargs: dict = {"target_position": tgt}
+                if try_ori and ori is not None:
+                    kwargs["target_orientation"] = ori
+                if warm is not None:
+                    kwargs["warm_start"] = warm
                 try:
-                    if frame:
-                        res, _ok = _lk.compute_inverse_kinematics(frame, **kwargs)
-                    else:
-                        res, _ok = _lk.compute_inverse_kinematics(**kwargs)
+                    res, ok = _lk.compute_inverse_kinematics("meca_axis_6_link", **kwargs)
                     jpos = res if isinstance(res, np.ndarray) else np.asarray(res.joint_positions)
-                    if bool(_ok):
+                    if bool(ok):
                         return jpos, True
                 except TypeError:
-                    continue
+                    pass
             return None, False
 
-        for y in y_values:
-            tgt = np.array([SCAN_X_M, y, SCAN_HEIGHT_M])
-            jpos, ok = _ik_with_ori(tgt, approach_ori)
-            if ok:
-                warm = jpos
-                n_ok += 1
-            else:
-                jpos = warm.copy()
-            _scan_jnt_list.append(jpos.copy())
-            scan_ee_targets.append(tgt)
+        # Force LULA to stay on a single IK branch:
+        # - clear default seeds so only warm_start is used
+        # - limit to 1 CCD descent so it only follows the warm_start gradient
+        _lk.set_default_cspace_seeds([])
+        _lk.max_num_descents = 1
+        REJECT_THRESH = np.radians(40)  # reject IK if any joint jumps > 40°
 
-        _scan_jnt_traj = np.array(_scan_jnt_list)   # (N_SCAN, n_dof)
-        scan_ee_targets = np.array(scan_ee_targets)  # (N_SCAN, 3)
+        scan_start_pos = np.array([SCAN_X_M, by - half, SCAN_HEIGHT_M])
+        scan_end_pos   = np.array([SCAN_X_M, by + half, SCAN_HEIGHT_M])
 
-        # ── Post-process: smooth over large inter-waypoint joint jumps ────────
-        # Without IK warm-starting the solver can land on different branches for
-        # adjacent points.  Detect any step > 55° and linearly interpolate in
-        # joint space over the entire "wrong-branch" region.
-        JUMP_THRESH = np.radians(55)
-        i = 1
-        n_smoothed_pts = 0
-        while i < N_SCAN:
-            diff = np.abs(_scan_jnt_traj[i] - _scan_jnt_traj[i - 1])
-            if np.any(diff > JUMP_THRESH):
-                # Find the next point within 90° of traj[i-1] in every joint
-                j = i + 1
-                ref_j = _scan_jnt_traj[i - 1]
-                while j < N_SCAN and np.any(
-                        np.abs(_scan_jnt_traj[j] - ref_j) > np.radians(90)):
-                    j += 1
-                j_end = min(j, N_SCAN - 1)
-                jA = _scan_jnt_traj[i - 1]
-                jB = _scan_jnt_traj[j_end]
-                span = j_end - (i - 1)
-                if span > 1:
-                    for k in range(1, span):
-                        alpha = k / span
-                        _scan_jnt_traj[i - 1 + k] = (1.0 - alpha) * jA + alpha * jB
-                    n_smoothed_pts += span - 1
-                i = j_end + 1
-            else:
-                i += 1
-
-        # Validate trajectory continuity
-        j_range_deg = np.degrees(_scan_jnt_traj.max(axis=0) - _scan_jnt_traj.min(axis=0))
-        print(f"[scan] IK: {n_ok}/{N_SCAN} solved  "
-              f"smoothed: {n_smoothed_pts} pts  "
-              f"joint range (deg): {np.round(j_range_deg, 1).tolist()}")
-        print(f"[scan] J1 start→end: "
-              f"{np.degrees(_scan_jnt_traj[0, 0]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 0]):.1f}°  "
-              f"J2: {np.degrees(_scan_jnt_traj[0, 1]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 1]):.1f}°  "
-              f"J4: {np.degrees(_scan_jnt_traj[0, 3]):.1f}°→{np.degrees(_scan_jnt_traj[-1, 3]):.1f}°")
-
-        # ── Cartesian approach trajectory ──────────────────────────────────────
-        # Compute IK at N_APPROACH evenly-spaced points along the straight line
-        # from ee_at_demo (arm at DEMO config) to scan_ee_targets[0] (scan start).
-        # This keeps the EE on a straight Cartesian path during approach instead
-        # of the arc produced by direct joint-space interpolation.
+        # ── Cartesian approach trajectory (computed FIRST so endpoint seeds the scan) ──
+        # IK at N_APPROACH Cartesian points from demo EE → scan start EE.
+        # warm_start follows the arm along the approach — reject branch-flipped solutions.
         N_APPROACH = 20
         app_pts = np.array([
-            (1.0 - s) * ee_at_demo + s * scan_ee_targets[0]
+            (1.0 - s) * ee_at_demo + s * scan_start_pos
             for s in np.linspace(0.0, 1.0, N_APPROACH)
         ])
         a_warm = _scan_start_joints.copy()
-        _app_list = []
+        _app_list: list = []
         n_app_ok = 0
         for pt in app_pts:
-            jpos_a, ok_a = _ik_with_ori(pt, approach_ori)
+            jpos_a, ok_a = _ik_with_ori(pt, approach_ori, warm=a_warm)
+            if ok_a and np.any(np.abs(jpos_a - a_warm) > REJECT_THRESH):
+                ok_a = False  # branch flip — hold previous
             if ok_a:
                 a_warm = jpos_a
                 n_app_ok += 1
@@ -480,31 +422,43 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
                 jpos_a = a_warm.copy()
             _app_list.append(jpos_a.copy())
         _approach_jnt_traj = np.array(_app_list)
-
-        # Apply same branch-jump smoothing to approach trajectory
-        i_a = 1
-        while i_a < N_APPROACH:
-            diff_a = np.abs(_approach_jnt_traj[i_a] - _approach_jnt_traj[i_a - 1])
-            if np.any(diff_a > JUMP_THRESH):
-                j_a = i_a + 1
-                ref_ja = _approach_jnt_traj[i_a - 1]
-                while j_a < N_APPROACH and np.any(
-                        np.abs(_approach_jnt_traj[j_a] - ref_ja) > np.radians(90)):
-                    j_a += 1
-                j_end_a = min(j_a, N_APPROACH - 1)
-                span_a = j_end_a - (i_a - 1)
-                if span_a > 1:
-                    jA_a = _approach_jnt_traj[i_a - 1]
-                    jB_a = _approach_jnt_traj[j_end_a]
-                    for k_a in range(1, span_a):
-                        _approach_jnt_traj[i_a - 1 + k_a] = (
-                            (1.0 - k_a / span_a) * jA_a + (k_a / span_a) * jB_a
-                        )
-                i_a = j_end_a + 1
-            else:
-                i_a += 1
         print(f"[scan] Approach traj: {n_app_ok}/{N_APPROACH} IK solved  "
               f"({np.degrees(np.abs(_approach_jnt_traj[-1]-_approach_jnt_traj[0]).max()):.1f}° max span)")
+
+        # ── Scan trajectory: warm_start from approach endpoint (arm at scan start) ──
+        # Starting from the approach endpoint ensures continuity and branch consistency
+        # for the full sweep from Y=-126 mm to Y=+126 mm.
+        N_SCAN   = 40
+        y_values = np.linspace(by - half, by + half, N_SCAN)
+        warm     = _approach_jnt_traj[-1].copy()   # end of approach = start of scan
+        scan_ee_targets = np.array([
+            [SCAN_X_M, y, SCAN_HEIGHT_M] for y in y_values
+        ])
+        print(f"[scan] Planning {N_SCAN}-point scan IK  "
+              f"Y={((by-half)*1000):.0f}→{((by+half)*1000):.0f} mm  "
+              f"seed=approach_end …")
+        _scan_jnt_list: list = []
+        n_ok = n_rejected = 0
+        for y in y_values:
+            tgt = np.array([SCAN_X_M, y, SCAN_HEIGHT_M])
+            jpos, ok = _ik_with_ori(tgt, approach_ori, warm=warm)
+            if ok and np.any(np.abs(jpos - warm) > REJECT_THRESH):
+                ok = False   # branch flip — discard
+                n_rejected += 1
+            if ok:
+                warm = jpos
+                n_ok += 1
+            else:
+                jpos = warm.copy()
+            _scan_jnt_list.append(jpos.copy())
+        _scan_jnt_traj = np.array(_scan_jnt_list)
+        print(f"[scan] Scan IK: {n_ok}/{N_SCAN} accepted  {n_rejected} rejected (branch flip)")
+
+        # Validate trajectory continuity
+        j_range_deg = np.degrees(_scan_jnt_traj.max(axis=0) - _scan_jnt_traj.min(axis=0))
+        print(f"[scan] Joint range (deg): {np.round(j_range_deg, 1).tolist()}")
+        print(f"[scan] J1 {np.degrees(_scan_jnt_traj[0,0]):.1f}°→{np.degrees(_scan_jnt_traj[-1,0]):.1f}°  "
+              f"J4 {np.degrees(_scan_jnt_traj[0,3]):.1f}°→{np.degrees(_scan_jnt_traj[-1,3]):.1f}°")
 
         steps = SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP
         print(f"[scan] Approach {SCAN_STEPS_APPROACH} steps + Sweep {SCAN_STEPS_SWEEP} steps "
