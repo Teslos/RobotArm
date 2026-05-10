@@ -231,7 +231,8 @@ def _set_viewport_camera(scan: bool = False) -> None:
 
 
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
-                   scan: bool = False, headless: bool = False, render_interval: int = 1) -> None:
+                   scan: bool = False, headless: bool = False, render_interval: int = 1,
+                   scan_path: str | None = None) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
@@ -368,10 +369,28 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
               f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
-        # ── Scan trajectory: precomputed grid → online IK fallback ───────────
+        # ── Build scan EE target path (file or default linear sweep) ─────────
         SCAN_X_M = 0.136
         by   = sc.busbar_position[1]   # 0.0 m
         half = SCAN_LENGTH_M / 2.0     # 0.126 m
+
+        if scan_path is not None:
+            scan_ee_targets = np.load(scan_path)
+            if scan_ee_targets.ndim != 2 or scan_ee_targets.shape[1] != 3:
+                raise ValueError(
+                    f"scan_path file must contain an (N, 3) array, "
+                    f"got shape {scan_ee_targets.shape}"
+                )
+            N_SCAN = len(scan_ee_targets)
+            print(f"[scan] Loaded {N_SCAN}-point path from {scan_path}")
+        else:
+            N_SCAN = 40
+            y_values = np.linspace(by - half, by + half, N_SCAN)
+            scan_ee_targets = np.array([
+                [SCAN_X_M, y, SCAN_HEIGHT_M] for y in y_values
+            ])
+            print(f"[scan] Using default linear sweep: {N_SCAN} points "
+                  f"Y={((by-half)*1000):.0f}→{((by+half)*1000):.0f} mm")
 
         def _ik_with_ori(tgt, ori, warm=None):
             """IK with orientation constraint, warm_start, and position-only fallback."""
@@ -397,8 +416,7 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         _lk.max_num_descents = 1
         REJECT_THRESH = np.radians(40)  # reject IK if any joint jumps > 40°
 
-        scan_start_pos = np.array([SCAN_X_M, by - half, SCAN_HEIGHT_M])
-        scan_end_pos   = np.array([SCAN_X_M, by + half, SCAN_HEIGHT_M])
+        scan_start_pos = scan_ee_targets[0]
 
         # ── Cartesian approach trajectory (computed FIRST so endpoint seeds the scan) ──
         # IK at N_APPROACH Cartesian points from demo EE → scan start EE.
@@ -426,21 +444,11 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
               f"({np.degrees(np.abs(_approach_jnt_traj[-1]-_approach_jnt_traj[0]).max()):.1f}° max span)")
 
         # ── Scan trajectory: warm_start from approach endpoint (arm at scan start) ──
-        # Starting from the approach endpoint ensures continuity and branch consistency
-        # for the full sweep from Y=-126 mm to Y=+126 mm.
-        N_SCAN   = 40
-        y_values = np.linspace(by - half, by + half, N_SCAN)
-        warm     = _approach_jnt_traj[-1].copy()   # end of approach = start of scan
-        scan_ee_targets = np.array([
-            [SCAN_X_M, y, SCAN_HEIGHT_M] for y in y_values
-        ])
-        print(f"[scan] Planning {N_SCAN}-point scan IK  "
-              f"Y={((by-half)*1000):.0f}→{((by+half)*1000):.0f} mm  "
-              f"seed=approach_end …")
+        warm = _approach_jnt_traj[-1].copy()   # end of approach = start of scan
+        print(f"[scan] Planning {N_SCAN}-point scan IK  seed=approach_end …")
         _scan_jnt_list: list = []
         n_ok = n_rejected = 0
-        for y in y_values:
-            tgt = np.array([SCAN_X_M, y, SCAN_HEIGHT_M])
+        for tgt in scan_ee_targets:
             jpos, ok = _ik_with_ori(tgt, approach_ori, warm=warm)
             if ok and np.any(np.abs(jpos - warm) > REJECT_THRESH):
                 ok = False   # branch flip — discard
@@ -610,6 +618,9 @@ def main() -> None:
                       help="Move arm above busbar centre using RMPFlow (needs LULA config files)")
     mode.add_argument("--scan", action="store_true",
                       help=f"Approach busbar then sweep {SCAN_LENGTH_M*1000:.0f} mm along Y axis")
+    parser.add_argument("--scan-path", metavar="FILE.npy",
+                        help="Path to an (N,3) .npy file of EE XYZ waypoints for --scan mode. "
+                             "Default: linear Y sweep over the busbar.")
     args = parser.parse_args()
 
     # SimulationApp must be created before any omni.* imports
@@ -632,7 +643,8 @@ def main() -> None:
         print(f"[asset] Busbar USD found: {BUSBAR_USD}")
 
     _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow,
-                   scan=args.scan, headless=args.headless, render_interval=args.render_interval)
+                   scan=args.scan, headless=args.headless, render_interval=args.render_interval,
+                   scan_path=args.scan_path)
 
     app.close()
 
