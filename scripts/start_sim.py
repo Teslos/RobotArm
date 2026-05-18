@@ -203,8 +203,8 @@ def _set_viewport_camera(scan: bool = False) -> None:
     """Point the default viewport camera.
 
     Default (iso): eye=(0.55, -0.45, 0.45) → workspace centre.
-    Scan mode:     eye=(0.50,  0.00, 0.35) → busbar scan line, looking along +X
-                   so the Y sweep appears as left-right motion in the viewport.
+    Scan mode:     elevated 3/4 view looking down at the busbar top surface
+                   so the 18×18 mm grid sweep is visible with the arm above it.
     """
     try:
         from isaacsim.core.utils.viewports import set_camera_view
@@ -215,11 +215,13 @@ def _set_viewport_camera(scan: bool = False) -> None:
             return
     import numpy as np
     if scan:
-        # Side view: camera at positive X, looking toward the scan line.
-        # Y motion appears left-right; Z height clearly visible.
+        # Elevated 3/4 view: camera above and to the side of the busbar,
+        # target = busbar top surface centre (X=190mm, Y=0, Z=107.5mm).
+        # Shows the arm approaching from above and the EE stepping across
+        # the 18×18 mm grid at 111.5 mm height.
         set_camera_view(
-            eye=np.array([0.50, 0.00, 0.35]),
-            target=np.array([0.15, 0.00, 0.16]),
+            eye=np.array([0.40, -0.20, 0.35]),
+            target=np.array([0.19, 0.00, 0.11]),
             camera_prim_path="/OmniverseKit_Persp",
         )
     else:
