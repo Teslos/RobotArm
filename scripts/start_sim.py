@@ -220,7 +220,7 @@ def _set_viewport_camera(scan: bool = False) -> None:
         # Shows the arm approaching from above and the EE stepping across
         # the 18×18 mm grid at 111.5 mm height.
         set_camera_view(
-            eye=np.array([0.40, -0.20, 0.35]),
+            eye=np.array([0.30, -0.12, 0.25]),
             target=np.array([0.19, 0.00, 0.11]),
             camera_prim_path="/OmniverseKit_Persp",
         )
