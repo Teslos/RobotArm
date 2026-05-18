@@ -40,14 +40,14 @@ RMPFLOW_CONFIG       = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
 SCAN_WORKSPACE_NPZ   = os.path.join(REPO_ROOT, "results", "scan_workspace.npz")
 
 # Meca500 R3 joint targets (degrees) — best approach to busbar centre.
-# Derived from IK grid search (results/workspace.npz): nearest reachable point
-# to busbar centre [0.15, 0.0, 0.18] m → EE at [0.136, 0.036, 0.162] m.
+# NOTE: derived from old busbar position (0.15, 0.0, 0.03). Busbar is now at
+# (0.190, 0.0, 0.115) — re-run map_workspace.py to update these values.
 # Joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°, J4 ±170°, J5 ±115°, J6 ±180°.
 DEMO_JOINT_DEG = [-1.5, 35.0, 18.3, 36.9, 112.4, 12.9]
 
 # Busbar scan parameters
 SCAN_LENGTH_M       = 0.252   # 252 mm scan along the busbar Y axis
-SCAN_HEIGHT_M       = 0.162   # hover height from IK grid search
+SCAN_HEIGHT_M       = 0.247   # hover height — busbar top 0.165 m + 82 mm clearance
 SCAN_STEPS_APPROACH = 600     # steps to reach centre hover (10 s at 60 Hz)
 SCAN_STEPS_SWEEP    = 1200    # steps for each sweep leg (20 s at 60 Hz)
 
@@ -370,7 +370,7 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
               f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
         # ── Build scan EE target path (file or default linear sweep) ─────────
-        SCAN_X_M = 0.136
+        SCAN_X_M = 0.176   # busbar near face 0.169 m + 7 mm offset
         by   = sc.busbar_position[1]   # 0.0 m
         half = SCAN_LENGTH_M / 2.0     # 0.126 m
 

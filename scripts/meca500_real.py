@@ -42,9 +42,12 @@ JOINT LIMITS (hardware hard stops — software limits are tighter by 5°)
   J4: ±170°   J5: ±115°          J6: ±180°
 
 SCAN GEOMETRY (relative to robot base, same frame as the sim)
+  Busbar position: X=190 mm, Z centre=115 mm (bottom at 65 mm, top at 165 mm)
   Approach pose : joints = [−1.5°, 35.0°, 18.3°, 36.9°, 112.4°, 12.9°]
-  Hover height  : EE Z ≈ 162 mm  (≈80 mm above busbar top surface)
-  Scan X        : 136 mm          (constant during sweep)
+                  NOTE: these were derived from old busbar position — re-run
+                  map_workspace.py in the sim to get updated joint targets.
+  Hover height  : EE Z ≈ 247 mm  (≈82 mm above busbar top surface at 165 mm)
+  Scan X        : 176 mm          (7 mm past busbar near face at 168.75 mm)
   Scan Y range  : −126 mm → +126 mm  (252 mm busbar length)
 
 AFTER OPERATION
@@ -109,8 +112,8 @@ WS_Z: Tuple[float, float] = (  20.0,  400.0)
 
 DEMO_JOINT_DEG: List[float] = [-1.5, 35.0, 18.3, 36.9, 112.4, 12.9]
 
-SCAN_X_MM: float = 136.0      # EE X during scan (from IK grid search)
-SCAN_Z_MM: float = 162.0      # EE hover height
+SCAN_X_MM: float = 176.0      # EE X during scan — busbar near face 168.75 mm + 7 mm offset
+SCAN_Z_MM: float = 247.0      # EE hover height — busbar top 165 mm + 82 mm clearance
 BUSBAR_Y_MM: float = 0.0      # busbar centre Y
 HALF_SCAN_MM: float = 126.0   # half of 252 mm busbar length
 N_SCAN_POINTS: int = 40       # waypoints along the sweep

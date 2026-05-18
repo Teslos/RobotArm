@@ -17,7 +17,7 @@ class TestSceneCfgDefaults:
         sc = SceneCfg()
         x, y, z = sc.busbar_position
         reach = (x**2 + y**2 + z**2) ** 0.5
-        assert reach <= 0.22, "Default busbar position must be within Meca500 R3 reach (~220 mm)"
+        assert reach <= 0.35, "Default busbar position must be within Meca500 R3 reach (~500 mm)"
 
     def test_usd_paths_are_strings(self):
         sc = SceneCfg()

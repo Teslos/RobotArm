@@ -90,8 +90,8 @@ def main() -> None:
     print(f"[workspace] Saved to {args.output}")
 
     # Print the best approach point toward the busbar centre
-    # Busbar at (0.15, 0.0, 0.03), top surface z=0.08 m → 10 cm above = 0.18 m
-    busbar_centre = np.array([0.15, 0.0, 0.18])
+    # Busbar at (0.190, 0.0, 0.115), top surface z=0.165 m → 10 cm above = 0.265 m
+    busbar_centre = np.array([0.190, 0.0, 0.265])
     try:
         ee_pos, joints = wmap.best_approach(busbar_centre)
         print(f"[workspace] Best approach point : {ee_pos.tolist()}")

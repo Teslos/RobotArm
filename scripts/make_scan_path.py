@@ -21,8 +21,8 @@ REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(REPO_ROOT, "results")
 
 # Busbar geometry (must match start_sim.py constants)
-SCAN_X_M      = 0.136   # fixed EE X during scan
-SCAN_HEIGHT_M = 0.162   # fixed EE Z during scan
+SCAN_X_M      = 0.176   # fixed EE X during scan (busbar near face 0.169 m + 7 mm offset)
+SCAN_HEIGHT_M = 0.247   # fixed EE Z during scan (busbar top 0.165 m + 82 mm clearance)
 BUSBAR_Y      = 0.0     # busbar centre Y
 HALF          = 0.126   # half-length of busbar (252 mm / 2)
 
