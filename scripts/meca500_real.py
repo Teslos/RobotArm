@@ -67,7 +67,6 @@ import numpy as np
 # ── mecademicpy ────────────────────────────────────────────────────────────────
 try:
     from mecademicpy.robot import Robot
-    import mecademicpy.robot_trajectory_logger as mx_log  # optional, may not exist
 except ImportError as exc:
     sys.exit(
         f"[ERROR] mecademicpy not installed: {exc}\n"
