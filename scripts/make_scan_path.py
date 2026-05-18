@@ -6,6 +6,7 @@ Usage:
     micromamba run -n RobotArm python scripts/make_scan_path.py --shape zigzag
     micromamba run -n RobotArm python scripts/make_scan_path.py --shape circle
     micromamba run -n RobotArm python scripts/make_scan_path.py --shape spiral
+    micromamba run -n RobotArm python scripts/make_scan_path.py --shape grid2d
 
 Then run the sim with the generated path:
     micromamba run -n RobotArm python scripts/start_sim.py --scan --scan-path results/scan_path.npy
@@ -20,11 +21,15 @@ import numpy as np
 REPO_ROOT  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(REPO_ROOT, "results")
 
-# Busbar geometry (must match start_sim.py constants)
-SCAN_X_M      = 0.190   # fixed EE X during scan (directly above busbar centre)
-SCAN_HEIGHT_M = 0.188   # fixed EE Z during scan (busbar top 0.1075 m + 80 mm clearance)
+# Busbar geometry (must match config.py / start_sim.py constants)
+SCAN_X_M      = 0.190   # EE X centred above busbar
+SCAN_HEIGHT_M = 0.188   # EE Z for wide-area sweeps (80 mm above busbar top)
 BUSBAR_Y      = 0.0     # busbar centre Y
 HALF          = 0.126   # half-length of busbar (252 mm / 2)
+
+# Busbar surface geometry (after 90° Y rotation, busbar lies flat)
+BUSBAR_TOP_M  = 0.1075  # busbar top surface Z (bottom 65 mm + thickness 42.5 mm)
+CONTACT_CLEARANCE_M = 0.004   # 4 mm above surface for contact/proximity scan
 
 
 def zigzag(rows: int = 5, cols: int = 8) -> np.ndarray:
@@ -61,7 +66,35 @@ def spiral(turns: int = 3, n: int = 120, max_radius: float = 0.06) -> np.ndarray
     ])
 
 
-SHAPES = {"zigzag": zigzag, "circle": circle, "spiral": spiral}
+def grid2d(
+    nx: int = 10,
+    ny: int = 10,
+    step_x_m: float = 0.002,
+    step_y_m: float = 0.002,
+) -> np.ndarray:
+    """
+    2-D raster grid scan 4 mm above the busbar top surface, tool pointing down.
+
+    nx × ny waypoints with step_x_m / step_y_m spacing (default 2 mm each).
+    The grid is centred on (SCAN_X_M, BUSBAR_Y) and scanned in a boustrophedon
+    (zigzag) pattern: left→right on even rows, right→left on odd rows.
+
+    With defaults: 10×10 grid, 2 mm step → 18 mm × 18 mm patch, 100 waypoints.
+    Z = BUSBAR_TOP_M + CONTACT_CLEARANCE_M = 107.5 mm + 4 mm = 111.5 mm.
+    """
+    z = BUSBAR_TOP_M + CONTACT_CLEARANCE_M
+    half_x = (nx - 1) * step_x_m / 2.0
+    half_y = (ny - 1) * step_y_m / 2.0
+    x_vals = np.linspace(SCAN_X_M - half_x, SCAN_X_M + half_x, nx)
+    y_vals = np.linspace(BUSBAR_Y - half_y, BUSBAR_Y + half_y, ny)
+    pts = []
+    for i, y in enumerate(y_vals):
+        xs = x_vals if i % 2 == 0 else x_vals[::-1]
+        pts.extend([[x, y, z] for x in xs])
+    return np.array(pts)
+
+
+SHAPES = {"zigzag": zigzag, "circle": circle, "spiral": spiral, "grid2d": grid2d}
 
 
 def main() -> None:
@@ -78,9 +111,9 @@ def main() -> None:
 
     print(f"[make_scan_path] Shape   : {args.shape}")
     print(f"[make_scan_path] Points  : {len(waypoints)}")
-    print(f"[make_scan_path] X range : {waypoints[:,0].min():.3f} → {waypoints[:,0].max():.3f} m")
-    print(f"[make_scan_path] Y range : {waypoints[:,1].min():.3f} → {waypoints[:,1].max():.3f} m")
-    print(f"[make_scan_path] Z range : {waypoints[:,2].min():.3f} → {waypoints[:,2].max():.3f} m")
+    print(f"[make_scan_path] X range : {waypoints[:,0].min():.4f} → {waypoints[:,0].max():.4f} m")
+    print(f"[make_scan_path] Y range : {waypoints[:,1].min():.4f} → {waypoints[:,1].max():.4f} m")
+    print(f"[make_scan_path] Z range : {waypoints[:,2].min():.4f} → {waypoints[:,2].max():.4f} m")
     print(f"[make_scan_path] Saved   : {args.output}")
     print()
     print("Run the sim with:")

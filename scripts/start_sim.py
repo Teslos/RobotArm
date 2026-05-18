@@ -232,7 +232,7 @@ def _set_viewport_camera(scan: bool = False) -> None:
 
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
                    scan: bool = False, headless: bool = False, render_interval: int = 1,
-                   scan_path: str | None = None) -> None:
+                   scan_path: str | None = None, orient_down: bool = False) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
@@ -362,14 +362,21 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         # EE Cartesian position at the settled approach pose
         ee_at_demo = np.array([float(trans_fk[0]), float(trans_fk[1]), float(trans_fk[2])])
         # LULA orientation constraint — [w, x, y, z]
-        approach_ori = np.array([
-            quat_fk.real,
-            quat_fk.imaginary[0],
-            quat_fk.imaginary[1],
-            quat_fk.imaginary[2],
-        ])
-        print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
-              f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
+        # --orient-down overrides with "tool pointing toward surface" (-Z world):
+        # 180° rotation around X → quaternion (0, 1, 0, 0) in wxyz.
+        if orient_down:
+            approach_ori = np.array([0.0, 1.0, 0.0, 0.0])
+            print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
+                  f"ori(wxyz)={approach_ori.tolist()} [OVERRIDDEN: tool pointing down]")
+        else:
+            approach_ori = np.array([
+                quat_fk.real,
+                quat_fk.imaginary[0],
+                quat_fk.imaginary[1],
+                quat_fk.imaginary[2],
+            ])
+            print(f"[scan] Approach EE: pos={np.round(ee_at_demo,3).tolist()}  "
+                  f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
         # ── Build scan EE target path (file or default linear sweep) ─────────
         SCAN_X_M = 0.190   # directly above busbar centre (top-down scan)
@@ -623,6 +630,9 @@ def main() -> None:
     parser.add_argument("--scan-path", metavar="FILE.npy",
                         help="Path to an (N,3) .npy file of EE XYZ waypoints for --scan mode. "
                              "Default: linear Y sweep over the busbar.")
+    parser.add_argument("--orient-down", action="store_true",
+                        help="Override scan IK orientation so the tool points toward the busbar "
+                             "surface (-Z world). Use with --scan for contact/proximity scans.")
     args = parser.parse_args()
 
     # SimulationApp must be created before any omni.* imports
@@ -646,7 +656,7 @@ def main() -> None:
 
     _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow,
                    scan=args.scan, headless=args.headless, render_interval=args.render_interval,
-                   scan_path=args.scan_path)
+                   scan_path=args.scan_path, orient_down=args.orient_down)
 
     app.close()
 
