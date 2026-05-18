@@ -40,10 +40,10 @@ RMPFLOW_CONFIG       = os.path.join(RMPFLOW_DIR, "rmpflow_config.yaml")
 SCAN_WORKSPACE_NPZ   = os.path.join(REPO_ROOT, "results", "scan_workspace.npz")
 
 # Meca500 R3 joint targets (degrees) — best approach to busbar centre.
-# NOTE: derived from old busbar position (0.15, 0.0, 0.03). Busbar is now at
-# (0.190, 0.0, 0.115) — re-run map_workspace.py to update these values.
+# Derived from IK grid search (results/workspace.npz): nearest reachable point
+# to busbar target [0.190, 0.0, 0.265] m → EE at [0.207, 0.036, 0.288] m.
 # Joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°, J4 ±170°, J5 ±115°, J6 ±180°.
-DEMO_JOINT_DEG = [-1.5, 35.0, 18.3, 36.9, 112.4, 12.9]
+DEMO_JOINT_DEG = [21.2, 13.1, 15.0, -147.3, 77.8, -37.6]
 
 # Busbar scan parameters
 SCAN_LENGTH_M       = 0.252   # 252 mm scan along the busbar Y axis
