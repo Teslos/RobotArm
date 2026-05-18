@@ -42,12 +42,12 @@ JOINT LIMITS (hardware hard stops — software limits are tighter by 5°)
   J4: ±170°   J5: ±115°          J6: ±180°
 
 SCAN GEOMETRY (relative to robot base, same frame as the sim)
-  Busbar position: X=190 mm, Z centre=115 mm (bottom at 65 mm, top at 165 mm)
-  Approach pose : joints = [21.2°, 13.1°, 15.0°, −147.3°, 77.8°, −37.6°]
-                  EE position: [207mm, 36mm, 288mm] (from IK grid search,
-                  nearest reachable point to busbar target [190, 0, 265] mm).
-  Hover height  : EE Z ≈ 247 mm  (≈82 mm above busbar top surface at 165 mm)
-  Scan X        : 176 mm          (7 mm past busbar near face at 168.75 mm)
+  Busbar position: X=190 mm, Z centre=86.25 mm (bottom at 65 mm, top at 107.5 mm)
+                  Rotated 90° around Y — wide face (100×404 mm) now horizontal.
+  Approach pose : joints = [−8.4°, 52.4°, 0.3°, 83.4°, 113.2°, −64.5°]
+                  EE position: [207mm, 36mm, 163mm] (55mm above busbar top).
+  Hover height  : EE Z ≈ 188 mm  (≈80 mm above busbar top surface at 107.5 mm)
+  Scan X        : 190 mm          (directly above busbar centre)
   Scan Y range  : −126 mm → +126 mm  (252 mm busbar length)
 
 AFTER OPERATION
@@ -110,10 +110,10 @@ WS_Z: Tuple[float, float] = (  20.0,  400.0)
 # SCAN GEOMETRY — matches simulation constants (metres → mm)
 # ==============================================================================
 
-DEMO_JOINT_DEG: List[float] = [21.2, 13.1, 15.0, -147.3, 77.8, -37.6]
+DEMO_JOINT_DEG: List[float] = [-8.4, 52.4, 0.3, 83.4, 113.2, -64.5]
 
-SCAN_X_MM: float = 176.0      # EE X during scan — busbar near face 168.75 mm + 7 mm offset
-SCAN_Z_MM: float = 247.0      # EE hover height — busbar top 165 mm + 82 mm clearance
+SCAN_X_MM: float = 190.0      # EE X during scan — directly above busbar centre
+SCAN_Z_MM: float = 188.0      # EE hover height — busbar top 107.5 mm + 80 mm clearance
 BUSBAR_Y_MM: float = 0.0      # busbar centre Y
 HALF_SCAN_MM: float = 126.0   # half of 252 mm busbar length
 N_SCAN_POINTS: int = 40       # waypoints along the sweep

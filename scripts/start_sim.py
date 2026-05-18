@@ -41,13 +41,13 @@ SCAN_WORKSPACE_NPZ   = os.path.join(REPO_ROOT, "results", "scan_workspace.npz")
 
 # Meca500 R3 joint targets (degrees) — best approach to busbar centre.
 # Derived from IK grid search (results/workspace.npz): nearest reachable point
-# to busbar target [0.190, 0.0, 0.265] m → EE at [0.207, 0.036, 0.288] m.
+# to busbar target [0.190, 0.0, 0.188] m → EE at [0.207, 0.036, 0.163] m.
 # Joint limits: J1 ±175°, J2 -70→90°, J3 -135→70°, J4 ±170°, J5 ±115°, J6 ±180°.
-DEMO_JOINT_DEG = [21.2, 13.1, 15.0, -147.3, 77.8, -37.6]
+DEMO_JOINT_DEG = [-8.4, 52.4, 0.3, 83.4, 113.2, -64.5]
 
 # Busbar scan parameters
 SCAN_LENGTH_M       = 0.252   # 252 mm scan along the busbar Y axis
-SCAN_HEIGHT_M       = 0.247   # hover height — busbar top 0.165 m + 82 mm clearance
+SCAN_HEIGHT_M       = 0.188   # hover height — busbar top 0.1075 m + 80 mm clearance
 SCAN_STEPS_APPROACH = 600     # steps to reach centre hover (10 s at 60 Hz)
 SCAN_STEPS_SWEEP    = 1200    # steps for each sweep leg (20 s at 60 Hz)
 
@@ -277,6 +277,8 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
     xform = UsdGeom.Xformable(busbar_prim)
     xform.ClearXformOpOrder()
     xform.AddTranslateOp().Set(Gf.Vec3d(*sc.busbar_position))
+    # 90° Y rotation: swaps X↔Z extents so the wide face (100×404 mm) is horizontal
+    xform.AddRotateYOp().Set(90.0)
 
     # Initialise articulation — dof_names populated after this call
     world.reset()
@@ -323,8 +325,8 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
             cfg=cfg,
         )
         controller.reset()
-        # Busbar half-height is 0.05 m (cube scale z=0.05); approach 10 cm above.
-        busbar_top_z = sc.busbar_position[2] + 0.05
+        # After 90° Y rotation busbar Z half-extent = 0.02125 m (was X scale); approach 10 cm above.
+        busbar_top_z = sc.busbar_position[2] + 0.02125
         target = np.array([sc.busbar_position[0], sc.busbar_position[1], busbar_top_z + 0.10])
         controller.set_end_effector_target(target)
         if steps == 0:
@@ -370,7 +372,7 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
               f"ori(wxyz)={np.round(approach_ori,3).tolist()}")
 
         # ── Build scan EE target path (file or default linear sweep) ─────────
-        SCAN_X_M = 0.176   # busbar near face 0.169 m + 7 mm offset
+        SCAN_X_M = 0.190   # directly above busbar centre (top-down scan)
         by   = sc.busbar_position[1]   # 0.0 m
         half = SCAN_LENGTH_M / 2.0     # 0.126 m
 

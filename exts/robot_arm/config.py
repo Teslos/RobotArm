@@ -74,7 +74,7 @@ class SceneCfg:
     robot_prim_path: str = "/World/meca500r3"
     busbar_prim_path: str = "/World/busbar"
     robot_position: Tuple[float, float, float] = (0.0, 0.0, 0.0)
-    busbar_position: Tuple[float, float, float] = (0.190, 0.0, 0.115)
+    busbar_position: Tuple[float, float, float] = (0.190, 0.0, 0.08625)
     ccd_link_names: Tuple[str, ...] = field(
         default_factory=lambda: ("meca_axis_6_link",)  # EE link from Meca500 R3 URDF
     )

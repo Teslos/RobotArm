@@ -54,5 +54,7 @@ def _load_busbar(world: World, cfg: RobotArmCfg) -> Any:
     xform = UsdGeom.Xformable(prim)
     xform.ClearXformOpOrder()
     xform.AddTranslateOp().Set(Gf.Vec3d(*sc.busbar_position))
+    # 90° Y rotation: swaps X↔Z extents so the wide face (100×404 mm) is horizontal
+    xform.AddRotateYOp().Set(90.0)
 
     return prim
