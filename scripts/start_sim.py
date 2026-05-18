@@ -49,7 +49,7 @@ DEMO_JOINT_DEG = [-2.4, -2.0, 52.3, -2.2, -32.1, -37.6]
 SCAN_LENGTH_M       = 0.252   # 252 mm scan along the busbar Y axis
 SCAN_HEIGHT_M       = 0.188   # hover height — busbar top 0.1075 m + 80 mm clearance
 SCAN_STEPS_APPROACH = 600     # steps to reach centre hover (10 s at 60 Hz)
-SCAN_STEPS_SWEEP    = 1200    # steps for each sweep leg (20 s at 60 Hz)
+SCAN_STEPS_PER_MOVE = 30      # steps to move between adjacent waypoints (0.5 s at 60 Hz)
 
 
 # ── Asset conversion helpers ─────────────────────────────────────────────────
@@ -234,7 +234,8 @@ def _set_viewport_camera(scan: bool = False) -> None:
 
 def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = False,
                    scan: bool = False, headless: bool = False, render_interval: int = 1,
-                   scan_path: str | None = None, orient_down: bool = False) -> None:
+                   scan_path: str | None = None, orient_down: bool = False,
+                   wait_time: float = 0.0) -> None:
     """
     Build the scene in the correct order:
       1. USD prim setup  (before world.reset)
@@ -479,9 +480,14 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
         print(f"[scan] J1 {np.degrees(_scan_jnt_traj[0,0]):.1f}°→{np.degrees(_scan_jnt_traj[-1,0]):.1f}°  "
               f"J4 {np.degrees(_scan_jnt_traj[0,3]):.1f}°→{np.degrees(_scan_jnt_traj[-1,3]):.1f}°")
 
-        steps = SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP
-        print(f"[scan] Approach {SCAN_STEPS_APPROACH} steps + Sweep {SCAN_STEPS_SWEEP} steps "
-              f"= {steps} steps ({steps/60:.0f} s)")
+        _steps_per_dwell = max(0, int(wait_time * 60))
+        _steps_per_wp    = SCAN_STEPS_PER_MOVE + _steps_per_dwell
+        _scan_steps_sweep = len(_scan_jnt_traj) * _steps_per_wp
+        steps = SCAN_STEPS_APPROACH + _scan_steps_sweep
+        print(f"[scan] Approach {SCAN_STEPS_APPROACH} steps + "
+              f"Sweep {len(_scan_jnt_traj)} waypoints × "
+              f"({SCAN_STEPS_PER_MOVE} move + {_steps_per_dwell} dwell) steps "
+              f"= {steps} steps ({steps/60:.0f} s)  [wait {wait_time:.1f} s/point]")
 
         # ── debug visualisation (immediate-mode: redrawn every render frame) ──
         _draw, _carb = _acquire_draw()
@@ -565,25 +571,27 @@ def _build_and_run(cfg, steps: int, app, demo: bool = False, rmpflow: bool = Fal
                         + alpha       * _approach_jnt_traj[hi]
                     )
                 else:
-                    sweep_t = min(
-                        float(step_count - SCAN_STEPS_APPROACH) / max(SCAN_STEPS_SWEEP, 1),
-                        1.0,
-                    )
-                    sweep_ts = 3.0 * sweep_t * sweep_t - 2.0 * sweep_t * sweep_t * sweep_t
-                    idx_f = sweep_ts * (len(_scan_jnt_traj) - 1)
-                    lo = int(idx_f)
-                    hi = min(lo + 1, len(_scan_jnt_traj) - 1)
-                    alpha = idx_f - lo
-                    tgt_joints = (
-                        (1.0 - alpha) * _scan_jnt_traj[lo]
-                        + alpha       * _scan_jnt_traj[hi]
-                    )
+                    # Per-waypoint move + dwell:
+                    # Each waypoint gets SCAN_STEPS_PER_MOVE steps (S-curve from prev)
+                    # followed by _steps_per_dwell steps holding at that position.
+                    sweep_step = step_count - SCAN_STEPS_APPROACH
+                    wp_idx     = min(sweep_step // _steps_per_wp, len(_scan_jnt_traj) - 1)
+                    phase_step = sweep_step % _steps_per_wp
+                    if phase_step < SCAN_STEPS_PER_MOVE:
+                        t  = float(phase_step) / SCAN_STEPS_PER_MOVE
+                        ts = 3.0 * t * t - 2.0 * t * t * t   # cubic ease-in/out
+                        prev_idx = max(0, wp_idx - 1)
+                        tgt_joints = (
+                            (1.0 - ts) * _scan_jnt_traj[prev_idx]
+                            + ts       * _scan_jnt_traj[wp_idx]
+                        )
+                    else:
+                        tgt_joints = _scan_jnt_traj[wp_idx]   # dwell — hold position
                 set_joint_position_targets(robot, tgt_joints.tolist())
                 # Log progress + actual EE position every ~5 s
                 if step_count % 300 == 0:
                     phase = "approach" if step_count < SCAN_STEPS_APPROACH else "sweep"
-                    pct = (min(step_count, SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP)
-                           / (SCAN_STEPS_APPROACH + SCAN_STEPS_SWEEP) * 100)
+                    pct = (min(step_count, steps) / steps * 100)
                     ee_str = ""
                     if _ee_prim is not None:
                         try:
@@ -635,6 +643,9 @@ def main() -> None:
     parser.add_argument("--orient-down", action="store_true",
                         help="Override scan IK orientation so the tool points toward the busbar "
                              "surface (-Z world). Use with --scan for contact/proximity scans.")
+    parser.add_argument("--wait-time", type=float, default=0.0, metavar="SECONDS",
+                        help="Dwell time at each scan waypoint in seconds (default: 0). "
+                             "Use with --scan to hold position for data acquisition.")
     args = parser.parse_args()
 
     # SimulationApp must be created before any omni.* imports
@@ -658,7 +669,8 @@ def main() -> None:
 
     _build_and_run(cfg, args.steps, app, demo=args.demo, rmpflow=args.rmpflow,
                    scan=args.scan, headless=args.headless, render_interval=args.render_interval,
-                   scan_path=args.scan_path, orient_down=args.orient_down)
+                   scan_path=args.scan_path, orient_down=args.orient_down,
+                   wait_time=args.wait_time)
 
     app.close()
 

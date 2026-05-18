@@ -264,7 +264,8 @@ def run_demo(robot: Robot) -> None:
         pass
 
 
-def run_scan(robot: Robot, scan_path_file: Optional[str] = None) -> None:
+def run_scan(robot: Robot, scan_path_file: Optional[str] = None,
+             wait_time: float = 0.0) -> None:
     """
     Phase 1 — Approach: move to busbar hover pose (joint space, validated IK).
     Phase 2 — Sweep  : linear scan along the busbar at constant height.
@@ -331,7 +332,8 @@ def run_scan(robot: Robot, scan_path_file: Optional[str] = None) -> None:
     print(f"[scan] All {len(waypoints)} waypoints OK.")
 
     # ── Phase 2: sweep ───────────────────────────────────────────────────────
-    print(f"[scan] Phase 2 — Sweep: executing {len(waypoints)} Cartesian moves …")
+    dwell_str = f"  then hold {wait_time:.1f} s" if wait_time > 0 else ""
+    print(f"[scan] Phase 2 — Sweep: {len(waypoints)} waypoints{dwell_str} …")
     for i, (wx, wy, wz) in enumerate(waypoints):
         pct = (i + 1) / len(waypoints) * 100
         print(
@@ -339,10 +341,10 @@ def run_scan(robot: Robot, scan_path_file: Optional[str] = None) -> None:
             f"x={wx:.1f} y={wy:.1f} z={wz:.1f} mm  ({pct:.0f}%)"
         )
         robot.MoveLin(wx, wy, wz, ee_alpha, ee_beta, ee_gamma)
-
-    # Wait for the last move to finish
-    robot.WaitIdle(timeout=WAIT_IDLE_TIMEOUT_S)
-    _check_robot_error(robot)
+        robot.WaitIdle(timeout=WAIT_IDLE_TIMEOUT_S)
+        _check_robot_error(robot)
+        if wait_time > 0.0:
+            time.sleep(wait_time)
 
     final_pose = robot.GetPose()
     print(f"[scan] Scan complete. Final pose: {final_pose}")
@@ -379,6 +381,11 @@ def main() -> None:
         "--scan-path", metavar="FILE.npy",
         help="(N,3) array of EE XYZ waypoints in mm (or m — auto-detected)"
     )
+    parser.add_argument(
+        "--wait-time", type=float, default=0.0, metavar="SECONDS",
+        help="Dwell time at each scan waypoint in seconds (default: 0). "
+             "Use to hold position for sensor data acquisition."
+    )
     args = parser.parse_args()
 
     # ── Print safety reminder ────────────────────────────────────────────────
@@ -403,7 +410,7 @@ def main() -> None:
         elif args.scan:
             if args.scan_path and not os.path.exists(args.scan_path):
                 raise FileNotFoundError(f"scan-path file not found: {args.scan_path}")
-            run_scan(robot, scan_path_file=args.scan_path)
+            run_scan(robot, scan_path_file=args.scan_path, wait_time=args.wait_time)
 
     except KeyboardInterrupt:
         print("\n[robot] Keyboard interrupt — pausing motion and shutting down …")
