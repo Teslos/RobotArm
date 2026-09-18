@@ -29,6 +29,13 @@ Fixes relative to the original scripts
 * **No lost bytes.**  The old code discarded everything received after the
   ``done`` token, then relied on a pre-trigger purge to clean up.  The leftover
   is now kept in an internal buffer and consumed by the next wait.
+* **Triggers and responses stay in lockstep.**  The priming trigger sent at
+  connection setup starts a real acquisition, but the old code only drained for
+  50 ms before starting the scan.  Its ``done`` therefore arrived after the
+  first point had been triggered and was consumed as that point's response, so
+  every point reported the previous point's acquisition and the arm moved on
+  while the instrument was still measuring.  :meth:`InstrumentLink.initialize`
+  now waits for it.
 * **Axis command matches the payload.**  ``Finall Rectangular Mesurment.py``
   announced ``yz`` but streamed ``x... y...`` labels, and
   ``Width X And Z Measurment .py`` announced the literal string
@@ -253,16 +260,49 @@ class InstrumentLink:
 
     # -- protocol steps ------------------------------------------------------
 
-    def initialize(self, settle_s: float = 0.5) -> bytes:
-        """Select the axis pair and fire one priming trigger.
+    def initialize(
+        self,
+        settle_s: float = 0.5,
+        priming_timeout_s: Optional[float] = None,
+    ) -> bytes:
+        """Select the axis pair, fire one priming trigger, await its ``done``.
 
         Returns any banner bytes the instrument sent back, which are consumed
         so they cannot be mistaken for a ``done`` later on.
+
+        The priming trigger starts a real acquisition, so the instrument
+        answers it with a ``done`` like any other.  The original scripts only
+        drained for 50 ms before moving on, which is far shorter than an
+        acquisition takes, so that ``done`` was still in flight when the first
+        point was triggered and got consumed as *that* point's response.  Every
+        subsequent point then reported the previous point's acquisition, the
+        arm moved on while the instrument was still measuring, and the final
+        point's ``done`` was never awaited at all.  Waiting for it here keeps
+        one trigger matched to one ``done`` for the rest of the scan.
+
+        ``priming_timeout_s`` bounds that wait and defaults to
+        :attr:`response_timeout_s`.  Pass ``0`` to skip it, for an instrument
+        that does not answer the priming trigger; the link then falls back to
+        the old drain-only behaviour.
         """
         self.send_command(self.axis_pair.command)
         self._sleep(settle_s)
+        banner = self.drain()
         self.send_command(TRIGGER_COMMAND)
-        return self.drain(settle_s=0.05)
+
+        timeout_s = (
+            self.response_timeout_s if priming_timeout_s is None
+            else priming_timeout_s
+        )
+        if timeout_s > 0:
+            try:
+                self.wait_for_done(timeout_s)
+            except InstrumentTimeout:
+                print(
+                    f"[instrument] No {END_TOKEN!r} for the priming trigger "
+                    f"within {timeout_s:.1f} s; continuing without it."
+                )
+        return banner + self.drain(settle_s=0.05)
 
     def trigger(self) -> None:
         """Send the acquisition trigger pulse."""

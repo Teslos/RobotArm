@@ -47,15 +47,22 @@ class _HighZSolver:
 
 
 class _WarmStartAwareSolver:
-    """Records whether warm_start_position was passed."""
+    """Records whether a warm start was passed.
+
+    The signature mirrors Isaac Sim 4.5's ``LulaKinematicsSolver``: ``frame_name``
+    first and positional, and the seed keyword spelled ``warm_start``.  The stub
+    previously took ``warm_start_position`` and no ``frame_name``, so every call
+    the mapper made raised ``TypeError`` and fell back to the old-API path --
+    which silently drops the seed, making all eight solves look cold.
+    """
     num_dofs = N_DOF
     warm_calls: int = 0
     cold_calls: int = 0
 
     def compute_inverse_kinematics(
-        self, target_position, target_orientation=None, warm_start_position=None
+        self, frame_name, target_position, target_orientation=None, warm_start=None
     ):
-        if warm_start_position is not None:
+        if warm_start is not None:
             _WarmStartAwareSolver.warm_calls += 1
         else:
             _WarmStartAwareSolver.cold_calls += 1

@@ -51,6 +51,7 @@ scripts/
   scan_raster.py    # 2-D raster scan + INT_Monitor sync (real robot)
   scan_line.py      # 1-D line scan + INT_Monitor sync (real robot)
   export_fft_to_excel.py  # Merge INT_Monitor FFT .txt files into a workbook
+  instrument_probe.py  # Diagnose the INT_Monitor TCP link (no robot needed)
 results/
   workspace.npz     # Last grid search: 202/320 reachable (63.1%), 8×8×5 grid
 config/robot_arm.yaml   # YAML mirror of default config values
@@ -77,6 +78,11 @@ micromamba run -n RobotArm python scripts/map_workspace.py --output results/my_s
 micromamba run -n RobotArm python scripts/scan_raster.py --dry-run --n-fast 10 --n-slow 10 --step-fast 2 --step-slow 2
 micromamba run -n RobotArm python scripts/scan_raster.py --fast-axis y --slow-axis x --n-fast 55 --n-slow 45 --step-fast 2 --step-slow 2 --axis-pair xy
 micromamba run -n RobotArm python scripts/scan_line.py --axis y --n-points 120 --step 1 --axis-pair yz
+
+# TCP link not working? Probe it without the robot (the scanners home the arm
+# BEFORE they open the socket, so a robot fault looks like a network fault).
+micromamba run -n RobotArm python scripts/instrument_probe.py --listen-only
+micromamba run -n RobotArm python scripts/instrument_probe.py --handshake --points 3
 
 # Merge INT_Monitor FFT text files into a workbook (xlsx needs openpyxl)
 micromamba run -n RobotArm python scripts/export_fft_to_excel.py --root "C:/EmpaDaten/Data_Folder/mess38"

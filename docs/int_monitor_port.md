@@ -79,6 +79,7 @@ pulls in Isaac Sim. Driving the physical arm needs no simulator.
 | 21 | `Any Lines in Y Direaction Scanning.py` | `wait_for_end_token()` returns `False` on disconnect but a float otherwise, and the caller distinguishes them with `is False` — it works, but one refactor away from silently treating a disconnect as a 0-second acquisition. |
 | 22 | `Any Lines in Y Direaction Scanning.py` | Each line moves to `line_start_pose` and then immediately issues the same pose again as loop iteration `i = 0`. |
 | 23 | `Finall  Rectangular Mesurment.py` | Per-point files are `data_{n:02d}.txt` for a 10 000-point scan, so `data_100.txt` sorts before `data_99.txt`. |
+| 31 | All scan scripts | **Every acquisition is attributed to the wrong point.** Connection setup fires a priming trigger, which starts a real acquisition, but the code only clears the socket for 50 ms before scanning. The priming `done` is therefore still in flight when the first point is triggered and is consumed as *that* point's response. Each point from then on reports the previous point's acquisition and, worse, the arm moves to the next waypoint while the instrument is still measuring the current one. The last point's `done` is never awaited at all. Confirmed on the wire with `scripts/instrument_probe.py`: against an instrument with a 0.3 s acquisition, point 1 returned in 0.063 s. |
 
 ### `txt to excel.py`
 
@@ -102,6 +103,10 @@ pulls in Isaac Sim. Driving the physical arm needs no simulator.
   (bug 7).
 * **Bounded waits.** Per-point response timeouts, with `InstrumentTimeout` and
   `InstrumentDisconnected` distinguished (bugs 12, 21).
+* **One trigger, one `done`.** `InstrumentLink.initialize()` waits for the
+  priming trigger's response instead of draining for 50 ms, so no point is ever
+  handed the previous acquisition's token (bug 31). Pass `priming_timeout_s=0`
+  for an instrument that does not answer the priming trigger.
 * **One connection, then exit** by default; `max_connections=0` restores the old
   unbounded behaviour (bug 17).
 * **Failures propagate.** An instrument error aborts the scan and is reported as
@@ -111,6 +116,35 @@ pulls in Isaac Sim. Driving the physical arm needs no simulator.
   zero-padding (bug 23).
 * **Real safety hop**: up at the end of a line, across at height, down at the
   next line start (bug 8). `--serpentine` avoids the rewind entirely.
+
+## When no data reaches Python
+
+`scripts/instrument_probe.py` opens the same TCP server as the scanners, but
+with no robot and no Isaac Sim, and prints every byte in both directions with
+timestamps.
+
+```powershell
+# Does INT_Monitor connect at all, and does it send anything unprompted?
+micromamba run -n RobotArm python scripts/instrument_probe.py --listen-only
+
+# Full handshake plus three fake points - the exact exchange run_scan performs.
+micromamba run -n RobotArm python scripts/instrument_probe.py --handshake --points 3
+```
+
+The scanners connect and home the robot **before** they open the socket, so a
+robot fault looks exactly like a network fault: the server never starts
+listening and INT_Monitor's connect is refused. Check with
+
+```powershell
+Get-NetTCPConnection -LocalPort 6340 -ErrorAction SilentlyContinue
+```
+
+If nothing is listening, Python is not at the accept yet. If the probe binds
+and INT_Monitor still never connects, check that it targets `localhost:6340`
+and that it is set to connect *now* — it opens the connection only when a
+measurement starts. If it targets a LAN address rather than loopback, the
+default `localhost` bind will not receive it; use `--host 0.0.0.0` (and
+`--host` on the scanners).
 
 ## Running the tests
 

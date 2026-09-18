@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 
 import pytest
 
@@ -98,7 +99,7 @@ def test_initialize_announces_the_axis_pair_matching_the_payload(pair):
     """Finall Rectangular Mesurment.py announced 'yz' while streaming 'x.. y..'."""
     pc, instrument = pair
     link = make_link(pc, axis_pair=AxisPair.XY)
-    link.initialize(settle_s=0.0)
+    link.initialize(settle_s=0.0, priming_timeout_s=0)
     sent = instrument.recv(1024).decode()
     assert sent == f"{AxisPair.XY.command}\r\n{TRIGGER_COMMAND}\r\n"
 
@@ -107,11 +108,46 @@ def test_initialize_consumes_the_instrument_banner(pair):
     pc, instrument = pair
     instrument.sendall(b"READY\r\n")
     link = make_link(pc)
-    assert b"READY" in link.initialize(settle_s=0.0)
+    assert b"READY" in link.initialize(settle_s=0.0, priming_timeout_s=0)
 
     # The banner must not be mistaken for a later 'done'.
     instrument.sendall(END_TOKEN)
     assert link.wait_for_done() >= 0.0
+
+
+def test_initialize_waits_for_the_priming_done(pair):
+    """The priming trigger's 'done' must not leak into the first point.
+
+    The originals drained for 50 ms and then started scanning, so this token —
+    which arrives only once the priming acquisition finishes — was consumed as
+    the *first point's* response.  Every point then reported the previous
+    point's acquisition time while the arm moved on mid-measurement.
+    """
+    pc, instrument = pair
+
+    def answer_the_priming_trigger():
+        instrument.recv(1024)                 # axis command + trigger
+        time.sleep(0.2)                       # a real acquisition takes time
+        instrument.sendall(END_TOKEN)
+
+    thread = threading.Thread(target=answer_the_priming_trigger)
+    thread.start()
+    try:
+        link = make_link(pc)
+        link.initialize(settle_s=0.0)
+    finally:
+        thread.join(timeout=2.0)
+
+    # Nothing stale is left over, so the next wait belongs to the next trigger.
+    with pytest.raises(InstrumentTimeout):
+        link.wait_for_done(0.1)
+
+
+def test_initialize_tolerates_a_silent_priming_trigger(pair):
+    """An instrument that ignores the priming trigger must not abort the scan."""
+    pc, _instrument = pair
+    link = make_link(pc)
+    link.initialize(settle_s=0.0, priming_timeout_s=0.05)  # no answer ever comes
 
 
 def test_send_command_on_a_closed_socket_raises_disconnected(pair):

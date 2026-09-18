@@ -275,10 +275,17 @@ def test_scan_over_a_real_socket_with_the_real_protocol(tmp_path):
     stop = threading.Event()
 
     def instrument_side():
-        """Answer every trigger with 'done', the way INT_Monitor does."""
+        """Answer every trigger with 'done', the way INT_Monitor does.
+
+        The loop counts *triggers answered*, not labels received.  Counting
+        labels raced: the last point's label and its trigger need not arrive in
+        the same packet, so the thread could exit on the label and leave the
+        final trigger unanswered, timing the scan out.
+        """
         buffer = b""
+        answered = 0
         instrument.settimeout(5.0)
-        while len(received) < n_points and not stop.is_set():
+        while answered < n_points and not stop.is_set():
             try:
                 chunk = instrument.recv(4096)
             except socket.timeout:
@@ -291,6 +298,7 @@ def test_scan_over_a_real_socket_with_the_real_protocol(tmp_path):
                 line = raw.decode()
                 if line == "1":                 # trigger
                     instrument.sendall(END_TOKEN)
+                    answered += 1
                 elif line:
                     received.append(line)
 
