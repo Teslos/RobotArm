@@ -31,6 +31,14 @@ exts/robot_arm/     # Main package (Isaac Sim extension)
   robots/meca500.py # load_meca500(): USD reference + articulation setup
   tasks/workspace_mapper.py  # WorkspaceMapper: IK grid search for reachability
                               #   WorkspaceMap: load/save/query results (.npz)
+  metrology/        # Physical-robot metrology stack (mm/deg, no Isaac Sim)
+    limits.py       #   WorkspaceBox + joint limits + pre-flight validators
+    instrument.py   #   INT_Monitor TCP handshake (AxisPair, InstrumentLink)
+    patterns.py     #   ScanPath geometry: line_scan(), raster_grid()
+    robot_session.py#   RobotSession: safety-checked mecademicpy facade
+    recording.py    #   PointRecord / PointLog streaming CSV
+    scan.py         #   run_scan(): move -> trigger -> wait -> log loop
+    fft_export.py   #   INT_Monitor FFT .txt -> CSV / XLSX
 assets/mecademic_description/
   urdf/meca500r3.urdf         # Robot URDF
   meshes/                     # .dae visual + .stl collision meshes
@@ -40,10 +48,14 @@ assets/mecademic_description/
 scripts/
   start_sim.py      # Main sim launcher (--demo, --rmpflow, --headless flags)
   map_workspace.py  # IK grid search over busbar region → results/workspace.npz
+  scan_raster.py    # 2-D raster scan + INT_Monitor sync (real robot)
+  scan_line.py      # 1-D line scan + INT_Monitor sync (real robot)
+  export_fft_to_excel.py  # Merge INT_Monitor FFT .txt files into a workbook
 results/
   workspace.npz     # Last grid search: 202/320 reachable (63.1%), 8×8×5 grid
 config/robot_arm.yaml   # YAML mirror of default config values
 docs/specs.md           # Full design specification
+docs/int_monitor_port.md  # INT_Monitor port notes + bug list for the originals
 tests/                  # Unit tests (no Isaac Sim required -- omni/pxr stubbed)
 ```
 
@@ -59,6 +71,16 @@ micromamba run -n RobotArm python scripts/start_sim.py --headless --rmpflow --st
 micromamba run -n RobotArm python scripts/map_workspace.py
 micromamba run -n RobotArm python scripts/map_workspace.py --nx 10 --ny 10 --nz 6
 micromamba run -n RobotArm python scripts/map_workspace.py --output results/my_search.npz
+
+# --- Physical robot + INT_Monitor (mm/deg, no Isaac Sim needed) ---
+# Always dry-run a new scan geometry first: validates waypoints, never moves.
+micromamba run -n RobotArm python scripts/scan_raster.py --dry-run --n-fast 10 --n-slow 10 --step-fast 2 --step-slow 2
+micromamba run -n RobotArm python scripts/scan_raster.py --fast-axis y --slow-axis x --n-fast 55 --n-slow 45 --step-fast 2 --step-slow 2 --axis-pair xy
+micromamba run -n RobotArm python scripts/scan_line.py --axis y --n-points 120 --step 1 --axis-pair yz
+
+# Merge INT_Monitor FFT text files into a workbook (xlsx needs openpyxl)
+micromamba run -n RobotArm python scripts/export_fft_to_excel.py --root "C:/EmpaDaten/Data_Folder/mess38"
+micromamba run -n RobotArm python scripts/export_fft_to_excel.py --root "C:/EmpaDaten/Data_Folder/mess38" --format csv
 ```
 
 ## Key design decisions (from docs/specs.md)
