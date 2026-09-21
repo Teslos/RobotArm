@@ -79,6 +79,11 @@ micromamba run -n RobotArm python scripts/scan_raster.py --dry-run --n-fast 10 -
 micromamba run -n RobotArm python scripts/scan_raster.py --fast-axis y --slow-axis x --n-fast 55 --n-slow 45 --step-fast 2 --step-slow 2 --axis-pair xy
 micromamba run -n RobotArm python scripts/scan_line.py --axis y --n-points 120 --step 1 --axis-pair yz
 
+# A scan ends at its home pose with the drives still active (no re-homing next
+# run). --home sets that pose (X Y Z, or X Y Z A B C); --disconnect-when-done
+# restores the old deactivate-and-disconnect finish.
+micromamba run -n RobotArm python scripts/scan_raster.py --home 190 0 188 --n-fast 10 --n-slow 10
+
 # TCP link not working? Probe it without the robot (the scanners home the arm
 # BEFORE they open the socket, so a robot fault looks like a network fault).
 micromamba run -n RobotArm python scripts/instrument_probe.py --listen-only

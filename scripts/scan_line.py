@@ -36,7 +36,8 @@ SAFETY - READ scripts/meca500_real.py FOR THE FULL CHECKLIST
   * --dry-run validates the geometry without contacting the robot.
   * --verify-up / --verify-down replay the post-scan Z excursions the original
     scripts performed; both default to 0 (no excursion).
-  * When the scan finishes the arm returns to its start pose and stays there,
+  * When the scan finishes the arm returns to its home pose (--home, else the
+    pose it started from) and stays there,
     activated and connected; --disconnect-when-done deactivates and disconnects
     instead.  An error or a Ctrl+C always ends in a full shutdown.
 ==============================================================================
@@ -70,11 +71,16 @@ from metrology import (  # noqa: E402
     check_waypoints,
     connect_robot,
     line_scan,
+    resolve_home_pose,
     run_scan,
     serve,
     write_point_file,
 )
-from metrology.limits import DEFAULT_WORKSPACE, LimitViolation  # noqa: E402
+from metrology.limits import (  # noqa: E402
+    DEFAULT_WORKSPACE,
+    LimitViolation,
+    check_pose,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -129,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Also write the legacy one-file-per-point text "
                                "dumps into DIR")
 
+    parser.add_argument("--home", type=float, nargs="+", metavar="V",
+                        help="Pose the arm returns to when the scan ends: "
+                             "X Y Z, or X Y Z ALPHA BETA GAMMA to pin the "
+                             "orientation too. Default: wherever the arm "
+                             "stands when the scan starts. Also the default "
+                             "--origin")
     parser.add_argument("--ip", default=DEFAULT_ROBOT_IP, help="Robot IP address")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate and validate the waypoints, save them to "
@@ -171,6 +183,12 @@ def run_verification_moves(session: RobotSession, home_pose, up_mm: float, down_
 def main() -> int:
     args = build_parser().parse_args()
 
+    if args.home is not None and len(args.home) not in (3, 6):
+        print("[ERROR] --home takes 3 values (X Y Z) or 6 "
+              "(X Y Z ALPHA BETA GAMMA), got "
+              f"{len(args.home)}.", file=sys.stderr)
+        return 2
+
     axis_pair = AxisPair.parse(args.axis_pair)
     settings = ScanSettings(
         settle_s=args.settle,
@@ -180,10 +198,12 @@ def main() -> int:
     )
 
     if args.dry_run:
-        origin = args.origin or [190.0, 0.0, 188.0]
+        home = args.home or [190.0, 0.0, 188.0]
+        origin = args.origin or home[:3]
         path = line_scan(origin, args.axis, args.n_points, args.step)
         describe(path, origin)
         try:
+            DEFAULT_WORKSPACE.check(*home[:3], context="--home")
             check_waypoints(path.points, DEFAULT_WORKSPACE)
         except LimitViolation as exc:
             print(f"[ERROR] {exc}", file=sys.stderr)
@@ -196,6 +216,8 @@ def main() -> int:
         os.makedirs(os.path.dirname(os.path.abspath(npy_path)), exist_ok=True)
         np.save(npy_path, path.points)
         print(f"[line] Waypoints saved: {npy_path}")
+        print(f"[line] Home pose    : "
+              f"x={home[0]:.2f} y={home[1]:.2f} z={home[2]:.2f} mm")
         print("[line] Dry run complete - the robot was not contacted.")
         return 0
 
@@ -232,7 +254,8 @@ def main() -> int:
                 print(f"[instrument] Init data: "
                       f"{banner.decode('utf-8', errors='ignore').strip()}")
 
-            home_pose = session.get_pose()
+            home_pose = resolve_home_pose(args.home, session.get_pose())
+            check_pose(home_pose, DEFAULT_WORKSPACE, context="--home")
             origin = args.origin or home_pose[:3]
             orientation = home_pose[3:]
             path = line_scan(origin, args.axis, args.n_points, args.step)

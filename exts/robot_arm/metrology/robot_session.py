@@ -25,7 +25,7 @@ Fixes relative to the original scripts
 """
 from __future__ import annotations
 
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
 from .limits import (
     DEFAULT_WORKSPACE,
@@ -43,6 +43,7 @@ __all__ = [
     "RobotSession",
     "connect_robot",
     "normalize_pose",
+    "resolve_home_pose",
 ]
 
 DEFAULT_ROBOT_IP = "192.168.0.100"
@@ -93,6 +94,37 @@ def normalize_pose(pose: Any) -> List[float]:
             f"[x, y, z, alpha, beta, gamma], got {values!r}"
         )
     return values
+
+
+def resolve_home_pose(
+    home: Optional[Sequence[float]],
+    live_pose: Sequence[float],
+) -> List[float]:
+    """Full six-value home pose from a 3- or 6-value override.
+
+    ``home`` is what the scan scripts take from ``--home``:
+
+    * ``None`` keeps ``live_pose`` — the arm returns to wherever it stood when
+      the scan started, which is the behaviour from before the flag existed.
+    * three values override ``[x, y, z]`` and keep the live orientation, so a
+      hand-taught tool angle survives.
+    * six values override the pose outright.
+
+    The workspace box is *not* checked here; callers validate the result with
+    :func:`~.limits.check_pose` so the failure names ``--home``.
+    """
+    live = normalize_pose(live_pose)
+    if home is None:
+        return live
+    values = [float(v) for v in home]
+    if len(values) == 3:
+        return values + live[3:]
+    if len(values) == POSE_LENGTH:
+        return values
+    raise LimitViolation(
+        f"--home takes 3 values [x, y, z] or {POSE_LENGTH} "
+        f"[x, y, z, alpha, beta, gamma], got {len(values)}: {values!r}"
+    )
 
 
 class RobotSession:

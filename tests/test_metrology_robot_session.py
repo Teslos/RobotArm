@@ -11,6 +11,7 @@ from exts.robot_arm.metrology.robot_session import (
     RobotSession,
     VelocityLimits,
     normalize_pose,
+    resolve_home_pose,
 )
 
 HOME = [190.0, 0.0, 188.0, -180.0, 0.0, 90.0]
@@ -247,3 +248,32 @@ def test_get_pose_does_not_hand_back_sdk_owned_state():
 
 def test_get_orientation():
     assert make_session().get_orientation() == HOME[3:]
+
+
+# ── --home resolution ────────────────────────────────────────────────────────
+
+def test_home_pose_defaults_to_the_live_pose():
+    """No --home: the arm returns to wherever it started, as it always did."""
+    assert resolve_home_pose(None, HOME) == HOME
+
+
+def test_home_pose_xyz_keeps_the_live_orientation():
+    resolved = resolve_home_pose([200.0, 10.0, 150.0], HOME)
+    assert resolved == [200.0, 10.0, 150.0] + HOME[3:]
+
+
+def test_home_pose_six_values_override_everything():
+    pose = [200.0, 10.0, 150.0, -170.0, 5.0, 80.0]
+    assert resolve_home_pose(pose, HOME) == pose
+
+
+def test_home_pose_does_not_alias_the_caller_list():
+    home = [200.0, 10.0, 150.0]
+    resolve_home_pose(home, HOME)[0] = 999.0
+    assert home == [200.0, 10.0, 150.0]
+
+
+@pytest.mark.parametrize("bad", [[1.0, 2.0], [1.0, 2.0, 3.0, 4.0], []])
+def test_home_pose_rejects_a_bad_length(bad):
+    with pytest.raises(LimitViolation):
+        resolve_home_pose(bad, HOME)

@@ -47,6 +47,7 @@ from .robot_session import (
     VelocityLimits,
     connect_robot,
     normalize_pose,
+    resolve_home_pose,
 )
 from .scan import ScanResult, ScanSettings, run_scan
 
@@ -80,6 +81,7 @@ __all__ = [
     "VelocityLimits",
     "connect_robot",
     "normalize_pose",
+    "resolve_home_pose",
     "DEFAULT_ROBOT_IP",
     # recording
     "PointLog",

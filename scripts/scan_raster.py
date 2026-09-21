@@ -30,11 +30,13 @@ How it runs
 -----------
 1. Connects to the robot, activates, homes, applies conservative velocity caps.
 2. Opens a TCP server and waits for the INT_Monitor client (one connection).
-3. Records the arm's current pose as the raster origin.
+3. Records the arm's current pose as the raster origin, unless --home or
+   --origin override it.
 4. Builds the full absolute waypoint list and validates it against the
    workspace box *before moving*.
 5. Measures every waypoint, appending to a CSV as it goes.
-6. Returns to the origin pose and stops there: the drives stay activated and
+6. Returns to the home pose (--home, else the pose it started from) and stops
+   there: the drives stay activated and
    the connection is left open, so a follow-up scan needs no re-homing.  Pass
    ``--disconnect-when-done`` to deactivate and disconnect instead.  An error
    or a Ctrl+C always ends in a full shutdown.
@@ -76,11 +78,16 @@ from metrology import (  # noqa: E402
     check_waypoints,
     connect_robot,
     raster_grid,
+    resolve_home_pose,
     run_scan,
     serve,
     write_point_file,
 )
-from metrology.limits import DEFAULT_WORKSPACE, LimitViolation  # noqa: E402
+from metrology.limits import (  # noqa: E402
+    DEFAULT_WORKSPACE,
+    LimitViolation,
+    check_pose,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -143,6 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Also write the legacy one-file-per-point text "
                                "dumps into DIR")
 
+    parser.add_argument("--home", type=float, nargs="+", metavar="V",
+                        help="Pose the arm returns to when the scan ends: "
+                             "X Y Z, or X Y Z ALPHA BETA GAMMA to pin the "
+                             "orientation too. Default: wherever the arm "
+                             "stands when the scan starts. Also the default "
+                             "--origin")
     parser.add_argument("--ip", default=DEFAULT_ROBOT_IP, help="Robot IP address")
     parser.add_argument("--dry-run", action="store_true",
                         help="Generate and validate the waypoints, save them to "
@@ -172,6 +185,12 @@ def main() -> int:
         print("[ERROR] --fast-axis and --slow-axis must differ.", file=sys.stderr)
         return 2
 
+    if args.home is not None and len(args.home) not in (3, 6):
+        print("[ERROR] --home takes 3 values (X Y Z) or 6 "
+              "(X Y Z ALPHA BETA GAMMA), got "
+              f"{len(args.home)}.", file=sys.stderr)
+        return 2
+
     axis_pair = AxisPair.parse(args.axis_pair)
     settings = ScanSettings(
         settle_s=args.settle,
@@ -183,7 +202,8 @@ def main() -> int:
 
     # -- dry run: geometry only, no hardware ---------------------------------
     if args.dry_run:
-        origin = args.origin or [190.0, 0.0, 188.0]
+        home = args.home or [190.0, 0.0, 188.0]
+        origin = args.origin or home[:3]
         path = raster_grid(
             origin, args.n_fast, args.n_slow, args.step_fast, args.step_slow,
             fast_axis=args.fast_axis, slow_axis=args.slow_axis,
@@ -191,6 +211,7 @@ def main() -> int:
         )
         describe(path, origin)
         try:
+            DEFAULT_WORKSPACE.check(*home[:3], context="--home")
             check_waypoints(path.points, DEFAULT_WORKSPACE)
         except LimitViolation as exc:
             print(f"[ERROR] {exc}", file=sys.stderr)
@@ -203,6 +224,8 @@ def main() -> int:
         os.makedirs(os.path.dirname(os.path.abspath(npy_path)), exist_ok=True)
         np.save(npy_path, path.points)
         print(f"[raster] Waypoints saved: {npy_path}")
+        print(f"[raster] Home pose    : "
+              f"x={home[0]:.2f} y={home[1]:.2f} z={home[2]:.2f} mm")
         print("[raster] Dry run complete - the robot was not contacted.")
         return 0
 
@@ -241,7 +264,8 @@ def main() -> int:
                 print(f"[instrument] Init data: "
                       f"{banner.decode('utf-8', errors='ignore').strip()}")
 
-            home_pose = session.get_pose()
+            home_pose = resolve_home_pose(args.home, session.get_pose())
+            check_pose(home_pose, DEFAULT_WORKSPACE, context="--home")
             origin = args.origin or home_pose[:3]
             orientation = home_pose[3:]
             path = raster_grid(
