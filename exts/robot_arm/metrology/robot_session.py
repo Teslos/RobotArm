@@ -16,7 +16,9 @@ Fixes relative to the original scripts
 * **Shutdown cannot mask the real error.**  Two scripts had a bare
   ``finally: robot.DeactivateRobot()``; if ``Connect`` failed, the deactivate
   raised and buried the original exception.  :meth:`RobotSession.shutdown`
-  swallows and reports its own failures instead.
+  swallows and reports its own failures instead, and its ``deactivate`` /
+  ``disconnect`` steps can each be skipped so a finished scan can leave the
+  arm powered and homed.
 * **Every target is bounds-checked** against the workspace box and the software
   joint limits before it is sent.
 * **Waits are bounded** by ``wait_timeout_s`` rather than blocking forever.
@@ -159,9 +161,21 @@ class RobotSession:
             f"angular={limits.cart_ang_deg_s} deg/s"
         )
 
-    def shutdown(self) -> None:
-        """Deactivate and disconnect.  Never raises."""
-        for step in ("DeactivateRobot", "Disconnect"):
+    def shutdown(self, *, deactivate: bool = True, disconnect: bool = True) -> None:
+        """Deactivate and/or disconnect.  Never raises.
+
+        Both steps are opt-out so a caller can finish a scan without powering
+        the arm down: ``shutdown(deactivate=False, disconnect=False)`` leaves
+        the drives energised and the arm homed, which is what the scan scripts
+        do after a successful run (the arm only has to be re-homed once the
+        drives have actually been deactivated).
+        """
+        steps = []
+        if deactivate:
+            steps.append("DeactivateRobot")
+        if disconnect:
+            steps.append("Disconnect")
+        for step in steps:
             method = getattr(self.robot, step, None)
             if method is None:
                 continue

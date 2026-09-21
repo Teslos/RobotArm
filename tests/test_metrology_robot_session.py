@@ -127,6 +127,19 @@ def test_shutdown_never_raises_and_cannot_mask_the_real_error():
     make_session(robot).shutdown()  # must not raise
 
 
+def test_shutdown_can_leave_the_arm_activated_and_connected():
+    """A finished scan parks the arm without powering it down."""
+    robot = FakeRobot()
+    make_session(robot).shutdown(deactivate=False, disconnect=False)
+    assert robot.names() == []
+
+
+def test_shutdown_can_disconnect_without_deactivating():
+    robot = FakeRobot()
+    make_session(robot).shutdown(deactivate=False)
+    assert robot.names() == ["Disconnect"]
+
+
 def test_context_manager_shuts_down_even_on_error():
     robot = FakeRobot()
     with pytest.raises(ValueError):

@@ -36,6 +36,9 @@ SAFETY - READ scripts/meca500_real.py FOR THE FULL CHECKLIST
   * --dry-run validates the geometry without contacting the robot.
   * --verify-up / --verify-down replay the post-scan Z excursions the original
     scripts performed; both default to 0 (no excursion).
+  * When the scan finishes the arm returns to its start pose and stays there,
+    activated and connected; --disconnect-when-done deactivates and disconnects
+    instead.  An error or a Ctrl+C always ends in a full shutdown.
 ==============================================================================
 """
 from __future__ import annotations
@@ -132,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
                              "a .npy next to --output, and exit without moving")
     parser.add_argument("--yes", action="store_true",
                         help="Skip the interactive safety confirmation")
+    parser.add_argument("--disconnect-when-done", action="store_true",
+                        help="Deactivate the drives and disconnect after a "
+                             "successful scan. By default the arm just returns "
+                             "to its start pose and stays activated and homed, "
+                             "so the next scan needs no re-homing")
     return parser
 
 
@@ -205,6 +213,7 @@ def main() -> int:
 
     session = None
     exit_code = 0
+    scan_completed = False
     try:
         session = connect_robot(args.ip)
         session.activate_and_home()
@@ -213,6 +222,7 @@ def main() -> int:
         )
 
         def handle(conn, _addr) -> None:
+            nonlocal scan_completed
             link = InstrumentLink(
                 conn, axis_pair,
                 response_timeout_s=args.response_timeout,
@@ -248,6 +258,7 @@ def main() -> int:
             run_verification_moves(session, home_pose, args.verify_up, args.verify_down)
             print("[line] Returning to the start pose ...")
             session.move_lin(home_pose)
+            scan_completed = True
 
         serve(
             handle, host=args.host, port=args.port,
@@ -268,7 +279,15 @@ def main() -> int:
         exit_code = 1
     finally:
         if session is not None:
-            session.shutdown()
+            if scan_completed and not args.disconnect_when_done:
+                # Measurement done: the arm is back at its start pose and stays
+                # activated and homed.  Nothing is deactivated or disconnected,
+                # so the next run can skip homing.  Pass --disconnect-when-done
+                # to power the drives down instead.
+                print("[line] Done - arm parked at the start pose, drives still "
+                      "active (not disconnected).")
+            else:
+                session.shutdown()
 
     return exit_code
 
