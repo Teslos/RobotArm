@@ -162,44 +162,91 @@ def run_probe(args: argparse.Namespace, conn: socket.socket) -> int:
     return 1 if failures else 0
 
 
+def open_listeners(host: str, port: int) -> list:
+    """Listening sockets for `host`, covering IPv4 and IPv6 separately.
+
+    ``localhost`` resolves to ``::1`` before ``127.0.0.1`` on Windows, so an
+    IPv4-only server (what the original scripts opened) silently misses a client
+    that dials the IPv6 loopback.  Both families are bound where possible, each
+    as a socket of its own with ``IPV6_V6ONLY`` set, so neither bind can steal
+    the other's port.
+    """
+    wildcards = {"", "0.0.0.0", "::", "any", "all"}
+    if host.lower() in wildcards:
+        candidates = [(socket.AF_INET, "0.0.0.0"), (socket.AF_INET6, "::")]
+    elif host.lower() == "localhost":
+        candidates = [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")]
+    else:
+        try:
+            family = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)[0][0]
+        except OSError:
+            family = socket.AF_INET
+        candidates = [(family, host)]
+
+    listeners = []
+    for family, address in candidates:
+        try:
+            sock = socket.socket(family, socket.SOCK_STREAM)
+        except OSError:
+            continue
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if family == socket.AF_INET6:
+            # Keep the two sockets independent rather than dual-stacking one.
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        try:
+            sock.bind((address, port))
+            sock.listen(5)
+        except OSError as exc:
+            sock.close()
+            print(f"{stamp()} Could not bind {address}:{port} - {exc}")
+            continue
+        listeners.append(sock)
+        print(f"{stamp()} Listening on {address}:{port}")
+    return listeners
+
+
 def main(argv=None) -> int:
+    import select
+
     args = build_parser().parse_args(argv)
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            server.bind((args.host, args.port))
-        except OSError as exc:
-            print(f"[ERROR] Cannot bind {args.host}:{args.port} - {exc}",
-                  file=sys.stderr)
-            print("        Another scan script may still be running, or the "
-                  "address is not one of this machine's.", file=sys.stderr)
-            return 1
-        server.listen(5)
-        print(f"{stamp()} Listening on {args.host}:{args.port} "
-              f"(waiting up to {args.accept_timeout:.0f} s for INT_Monitor)")
-        print("          Now start the measurement in INT_Monitor so it connects.")
+    listeners = open_listeners(args.host, args.port)
+    if not listeners:
+        print(f"[ERROR] Could not listen on {args.host}:{args.port}.",
+              file=sys.stderr)
+        print("        Another scan script may still be running, or the "
+              "address is not one of this machine's.", file=sys.stderr)
+        return 1
 
-        server.settimeout(args.accept_timeout)
-        try:
-            conn, addr = server.accept()
-        except socket.timeout:
+    try:
+        print(f"{stamp()} Waiting up to {args.accept_timeout:.0f} s for INT_Monitor")
+        print("          Now start the measurement in INT_Monitor so it connects.")
+        ready, _, _ = select.select(listeners, [], [], args.accept_timeout)
+        if not ready:
             print(f"\n{stamp()} No connection within {args.accept_timeout:.0f} s.",
                   file=sys.stderr)
             print("  The instrument never reached this server.  Check, in order:",
                   file=sys.stderr)
-            print(f"    1. INT_Monitor is configured for {args.host}:{args.port}",
-                  file=sys.stderr)
-            print("    2. It is set to connect now (it only connects when a "
-                  "measurement is started)", file=sys.stderr)
-            print("    3. If it targets a LAN address rather than loopback, "
+            print("    1. INT_Monitor's TCP settings: Active? on, and Address/Port "
+                  f"pointing at {args.port}", file=sys.stderr)
+            print("    2. It connects only when a measurement is actually started, "
+                  "not when Active? is switched on", file=sys.stderr)
+            print("    3. Toggle Active? off and on again with this probe already "
+                  "listening - a client that failed to connect earlier may not "
+                  "retry on its own", file=sys.stderr)
+            print("    4. If it targets a LAN address rather than loopback, "
                   "re-run with --host 0.0.0.0", file=sys.stderr)
             return 1
 
-        print(f"{stamp()} Connection from {addr}")
+        conn, addr = ready[0].accept()
+        family = "IPv6" if ready[0].family == socket.AF_INET6 else "IPv4"
+        print(f"{stamp()} Connection from {addr} over {family}")
         with conn:
             conn.settimeout(None)
             return run_probe(args, conn)
+    finally:
+        for sock in listeners:
+            sock.close()
 
 
 if __name__ == "__main__":
