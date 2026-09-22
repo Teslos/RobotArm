@@ -52,6 +52,7 @@ scripts/
   scan_line.py      # 1-D line scan + INT_Monitor sync (real robot)
   export_fft_to_excel.py  # Merge INT_Monitor FFT .txt files into a workbook
   instrument_probe.py  # Diagnose the INT_Monitor TCP link (no robot needed)
+  instrument_sim.py    # Fake INT_Monitor: answers each trigger after N s
 results/
   workspace.npz     # Last grid search: 202/320 reachable (63.1%), 8×8×5 grid
 config/robot_arm.yaml   # YAML mirror of default config values
@@ -88,6 +89,13 @@ micromamba run -n RobotArm python scripts/scan_raster.py --home 190 0 188 --n-fa
 # BEFORE they open the socket, so a robot fault looks like a network fault).
 micromamba run -n RobotArm python scripts/instrument_probe.py --listen-only
 micromamba run -n RobotArm python scripts/instrument_probe.py --handshake --points 3
+
+# No instrument available? Rehearse a scan against a fake one. The simulator is
+# the CLIENT (INT_Monitor's role), so it runs next to a real scan on the arm.
+micromamba run -n RobotArm python scripts/instrument_sim.py --acquire-time 2.0
+micromamba run -n RobotArm python scripts/instrument_sim.py --acquire-time 2.0 --jitter 0.3
+# Fault injection: --silent-after N (scan should hit --response-timeout),
+#                  --drop-after N   (scan should report a disconnect).
 
 # Merge INT_Monitor FFT text files into a workbook (xlsx needs openpyxl)
 micromamba run -n RobotArm python scripts/export_fft_to_excel.py --root "C:/EmpaDaten/Data_Folder/mess38"

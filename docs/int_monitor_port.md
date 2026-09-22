@@ -131,6 +131,34 @@ micromamba run -n RobotArm python scripts/instrument_probe.py --listen-only
 micromamba run -n RobotArm python scripts/instrument_probe.py --handshake --points 3
 ```
 
+## Rehearsing a scan without the instrument
+
+`scripts/instrument_sim.py` is the probe's mirror image: the probe plays the PC
+side (it listens, as the scanners do), the simulator plays INT_Monitor (it
+dials in) and answers every trigger with `done` after a fixed delay.  Run it
+beside a real scan and the arm moves for real while the measurement is faked,
+which is how a raster's wall-clock cost is estimated before committing to it.
+
+```powershell
+# Terminal 1 - the real scan, real arm.
+micromamba run -n RobotArm python scripts/scan_raster.py --n-fast 10 --n-slow 10
+
+# Terminal 2 - stands in for INT_Monitor, 2 s per acquisition.
+micromamba run -n RobotArm python scripts/instrument_sim.py --acquire-time 2.0
+```
+
+It retries the connection for `--retry-for` seconds, because the scanners bind
+only after homing.  `--silent-after N` and `--drop-after N` inject the two
+failures worth rehearsing: a stalled instrument (the scan must raise
+`InstrumentTimeout` at `--response-timeout`) and one that hangs up mid-scan
+(`InstrumentDisconnected`).  Pointing it at the probe instead of a scan
+exercises the whole protocol with no hardware at all:
+
+```powershell
+micromamba run -n RobotArm python scripts/instrument_probe.py --handshake --points 3
+micromamba run -n RobotArm python scripts/instrument_sim.py --acquire-time 0.4 --points 4
+```
+
 The scanners connect and home the robot **before** they open the socket, so a
 robot fault looks exactly like a network fault: the server never starts
 listening and INT_Monitor's connect is refused. Check with
