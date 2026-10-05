@@ -63,6 +63,8 @@ class PointRecord:
     pose: Sequence[float] = field(default=(0.0,) * 6)
     acquire_s: float = 0.0
     timestamp_s: float = 0.0
+    voltages: Sequence[float] = field(default=())
+    """DAQ readings in volts, one per channel; empty when no DAQ is used."""
 
     def __post_init__(self) -> None:
         pose = [float(v) for v in self.pose]
@@ -72,11 +74,16 @@ class PointRecord:
                 f"gamma], got {pose!r}"
             )
         self.pose = pose
+        self.voltages = [float(v) for v in self.voltages]
 
-    def as_row(self) -> dict:
-        """Flatten to the CSV column layout."""
+    def as_row(self, voltage_columns: Sequence[str] = ()) -> dict:
+        """Flatten to the CSV column layout.
+
+        ``voltage_columns`` names the columns the readings go into, in channel
+        order; a record with no (or fewer) readings leaves them blank.
+        """
         x, y, z, alpha, beta, gamma = self.pose
-        return {
+        row = {
             "index": self.index,
             "line": self.line,
             "label": self.label,
@@ -89,6 +96,9 @@ class PointRecord:
             "acquire_s": f"{self.acquire_s:.3f}",
             "timestamp_s": f"{self.timestamp_s:.3f}",
         }
+        for i, name in enumerate(voltage_columns):
+            row[name] = f"{self.voltages[i]:.6f}" if i < len(self.voltages) else ""
+        return row
 
     def as_dict(self) -> dict:  # pragma: no cover - convenience
         return asdict(self)
@@ -104,9 +114,16 @@ class PointLog:
             log.append(record)
     """
 
-    def __init__(self, path: str, *, overwrite: bool = True) -> None:
+    def __init__(
+        self,
+        path: str,
+        *,
+        overwrite: bool = True,
+        voltage_columns: Sequence[str] = (),
+    ) -> None:
         self.path = path
         self._overwrite = overwrite
+        self.voltage_columns = list(voltage_columns)
         self._handle: Optional[IO[str]] = None
         self._writer: Optional[csv.DictWriter] = None
         self.records: List[PointRecord] = []
@@ -117,7 +134,9 @@ class PointLog:
         exists = os.path.exists(self.path) and not self._overwrite
         mode = "a" if exists else "w"
         self._handle = open(self.path, mode, newline="", encoding="utf-8")
-        self._writer = csv.DictWriter(self._handle, fieldnames=list(CSV_FIELDS))
+        self._writer = csv.DictWriter(
+            self._handle, fieldnames=[*CSV_FIELDS, *self.voltage_columns],
+        )
         if not exists:
             self._writer.writeheader()
         self._handle.flush()
@@ -127,7 +146,7 @@ class PointLog:
         """Write one record and flush, so a crash keeps the measured points."""
         if self._writer is None or self._handle is None:
             raise RuntimeError("PointLog.open() must be called before append()")
-        self._writer.writerow(record.as_row())
+        self._writer.writerow(record.as_row(self.voltage_columns))
         self._handle.flush()
         self.records.append(record)
 

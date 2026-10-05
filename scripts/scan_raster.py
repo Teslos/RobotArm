@@ -83,6 +83,7 @@ from metrology import (  # noqa: E402
     serve,
     write_point_file,
 )
+from metrology.daq import add_daq_arguments, open_reader_from_args  # noqa: E402
 from metrology.limits import (  # noqa: E402
     DEFAULT_WORKSPACE,
     LimitViolation,
@@ -150,6 +151,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Also write the legacy one-file-per-point text "
                                "dumps into DIR")
 
+    add_daq_arguments(parser)
+
     parser.add_argument("--home", type=float, nargs="+", metavar="V",
                         help="Pose the arm returns to when the scan ends: "
                              "X Y Z, or X Y Z ALPHA BETA GAMMA to pin the "
@@ -198,6 +201,7 @@ def main() -> int:
         hop_height_mm=args.hop_height,
         response_timeout_s=args.response_timeout,
         use_move_lin=not args.move_pose,
+        voltage_samples=args.daq_samples,
     )
 
     # -- dry run: geometry only, no hardware ---------------------------------
@@ -244,9 +248,15 @@ def main() -> int:
             return 1
 
     session = None
+    daq = None
     exit_code = 0
     scan_completed = False
     try:
+        # Open the DAQ first: a missing device should fail before the arm homes.
+        daq = open_reader_from_args(args)
+        voltage_columns = (
+            [f"v{i}_V" for i in range(daq.n_channels)] if daq else []
+        )
         session = connect_robot(args.ip)
         session.activate_and_home()
         session.apply_velocity_limits(
@@ -275,10 +285,10 @@ def main() -> int:
             )
             describe(path, origin)
 
-            with PointLog(args.output) as log:
+            with PointLog(args.output, voltage_columns=voltage_columns) as log:
                 result = run_scan(
                     session, link, path, orientation,
-                    settings=settings, log=log,
+                    settings=settings, log=log, voltage_reader=daq,
                 )
 
             print(f"[raster] {result.n_points} point(s) in {result.duration_s:.1f} s")
@@ -314,6 +324,8 @@ def main() -> int:
         print(f"\n[ERROR] {exc}", file=sys.stderr)
         exit_code = 1
     finally:
+        if daq is not None:
+            daq.close()
         if session is not None:
             if scan_completed and not args.disconnect_when_done:
                 # Measurement done: the arm is back at its start pose and stays

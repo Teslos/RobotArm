@@ -229,6 +229,56 @@ def test_points_measured_before_a_failure_are_already_on_disk(tmp_path):
     assert len(lines) == 3          # header + 2 measured points
 
 
+# ── DAQ voltages ─────────────────────────────────────────────────────────────
+
+class FakeVoltageReader:
+    def __init__(self):
+        self.calls = []
+
+    def read_mean(self, n_samples):
+        self.calls.append(n_samples)
+        return np.array([len(self.calls) * 0.5, -1.0])
+
+
+def test_scan_reads_the_daq_once_per_point_with_the_configured_samples():
+    reader = FakeVoltageReader()
+    settings = ScanSettings(settle_s=0.0, progress_every=0, voltage_samples=25)
+
+    result = run(make_session(), FakeLink(), line_scan(ORIGIN, "x", 3, 1.0),
+                 settings=settings, voltage_reader=reader)
+
+    assert reader.calls == [25, 25, 25]
+    assert [r.voltages for r in result.records] == [
+        [0.5, -1.0], [1.0, -1.0], [1.5, -1.0],
+    ]
+
+
+def test_scan_without_a_daq_records_no_voltages():
+    result = run(make_session(), FakeLink(), line_scan(ORIGIN, "x", 2, 1.0))
+    assert all(r.voltages == [] for r in result.records)
+
+
+def test_voltages_land_in_the_csv_columns(tmp_path):
+    path_csv = tmp_path / "scan.csv"
+    with PointLog(str(path_csv), voltage_columns=["v0_V", "v1_V"]) as log:
+        run(make_session(), FakeLink(), line_scan(ORIGIN, "x", 2, 1.0),
+            log=log, voltage_reader=FakeVoltageReader())
+
+    lines = path_csv.read_text(encoding="utf-8").strip().splitlines()
+    assert lines[0].endswith("timestamp_s,v0_V,v1_V")
+    assert lines[1].endswith("0.500000,-1.000000")
+    assert lines[2].endswith("1.000000,-1.000000")
+
+
+def test_csv_without_voltage_columns_is_unchanged(tmp_path):
+    path_csv = tmp_path / "scan.csv"
+    with PointLog(str(path_csv)) as log:
+        run(make_session(), FakeLink(), line_scan(ORIGIN, "x", 2, 1.0), log=log)
+
+    assert path_csv.read_text(encoding="utf-8").splitlines()[0].endswith(
+        "timestamp_s")
+
+
 # ── Callbacks and results ────────────────────────────────────────────────────
 
 def test_on_point_callback_receives_every_record():

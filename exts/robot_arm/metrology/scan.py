@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Sequence
+from typing import Any, Callable, List, Optional, Sequence
 
 import numpy as np
 
@@ -59,6 +59,9 @@ class ScanSettings:
 
     progress_every: int = 1
     """Print a progress line every N waypoints; 0 silences progress output."""
+
+    voltage_samples: int = 100
+    """Samples averaged per DAQ reading when a ``voltage_reader`` is given."""
 
 
 @dataclass
@@ -107,6 +110,7 @@ def run_scan(
     *,
     settings: Optional[ScanSettings] = None,
     log: Optional[PointLog] = None,
+    voltage_reader: Optional[Any] = None,
     on_point: Optional[Callable[[PointRecord], None]] = None,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
@@ -127,6 +131,11 @@ def run_scan(
         arm configuration.
     log:
         Optional already-opened :class:`~.recording.PointLog`.
+    voltage_reader:
+        Optional open :class:`~.daq.VoltageReader` (anything with
+        ``read_mean(n)``).  At each waypoint it is read after the settle delay
+        and just before the instrument trigger, while the arm is stationary, so
+        the voltages belong to the pose recorded for that point.
 
     Raises
     ------
@@ -170,6 +179,10 @@ def run_scan(
 
         reached = session.get_pose()
         label = link.axis_pair.format_point(reached)
+        voltages = (
+            list(voltage_reader.read_mean(settings.voltage_samples))
+            if voltage_reader is not None else []
+        )
         acquire_s = link.measure_point(label, settings.response_timeout_s)
 
         record = PointRecord(
@@ -179,6 +192,7 @@ def run_scan(
             pose=reached,
             acquire_s=acquire_s,
             timestamp_s=clock() - started,
+            voltages=voltages,
         )
         records.append(record)
         if log is not None:
@@ -187,9 +201,10 @@ def run_scan(
             on_point(record)
 
         if settings.progress_every and index % settings.progress_every == 0:
+            volts = "".join(f"  {v:+.4f} V" for v in voltages)
             print(
                 f"[scan] {index + 1:>5}/{len(poses)}  line {line + 1}  "
-                f"{label}  acquired in {acquire_s:.2f} s"
+                f"{label}  acquired in {acquire_s:.2f} s{volts}"
             )
 
         if settings.dwell_s > 0:
